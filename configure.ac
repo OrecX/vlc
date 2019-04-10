@@ -2339,6 +2339,18 @@ then
 fi
 
 dnl
+dnl  fbs demux plugin
+dnl
+AC_ARG_ENABLE([fbs],
+  AS_HELP_STRING([--disable-fbs], [do not use FBS demux (default auto)]))
+if test "${enable_fbs}" != "no"
+then
+    AC_CHECK_HEADERS([fbs/fbs.hpp], [
+    VLC_ADD_PLUGIN([fbs])
+    VLC_ADD_LIBS([fbs],[-lfbsdec])])
+fi
+
+dnl
 dnl  Codec plugins
 dnl
 
