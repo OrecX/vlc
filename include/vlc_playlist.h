@@ -316,6 +316,12 @@ vlc_playlist_item_Release(vlc_playlist_item_t *);
 VLC_API input_item_t *
 vlc_playlist_item_GetMedia(vlc_playlist_item_t *);
 
+/**
+ * Return a unique id for the playlist item instance.
+ */
+VLC_API uint64_t
+vlc_playlist_item_GetId(vlc_playlist_item_t *);
+
 /* Playlist */
 
 /**
@@ -656,6 +662,16 @@ VLC_API ssize_t
 vlc_playlist_IndexOfMedia(vlc_playlist_t *playlist, const input_item_t *media);
 
 /**
+ * Return the index of a given item id.
+ *
+ * \param playlist the playlist, locked
+ * \param id       the id to locate
+ * \return the index of the playlist item having the id (-1 if not found)
+ */
+VLC_API ssize_t
+vlc_playlist_IndexOfId(vlc_playlist_t *playlist, uint64_t id);
+
+/**
  * Return the playback "repeat" mode.
  *
  * \param playlist the playlist, locked
@@ -849,8 +865,19 @@ vlc_playlist_PlayAt(vlc_playlist_t *playlist, size_t index)
  * \param media the media to preparse
  */
 VLC_API void
-vlc_playlist_Preparse(vlc_playlist_t *playlist, libvlc_int_t *libvlc,
-                      input_item_t *media);
+vlc_playlist_Preparse(vlc_playlist_t *playlist, input_item_t *media);
+
+/**
+ * Export the playlist to a file.
+ *
+ * \param filename the location where the exported file will be saved
+ * \param type the type of the playlist file to create (m3u, m3u8, xspf, ...)
+ * \return VLC_SUCCESS on success, another value on error
+ */
+// XXX use vlc_memstream instead of filename?
+VLC_API int
+vlc_playlist_Export(vlc_playlist_t *playlist, const char *filename,
+                    const char *type);
 
 /** @} */
 # ifdef __cplusplus

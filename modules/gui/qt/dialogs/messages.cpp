@@ -213,40 +213,46 @@ void MessagesDialog::sinkMessage( const MsgEvent *msg )
          messages->textCursor().anchor() != messages->textCursor().position() )
          messages->moveCursor( QTextCursor::End );
 
-    /* Start a new logic block so we can hide it on-demand */
-    messages->textCursor().insertBlock();
+    /* Start a new logic block */
+    if( !messages->document()->isEmpty() )
+        messages->textCursor().insertBlock();
 
-    QString buf = QString( "<i><font color='darkblue'>%1</font>" ).arg( msg->module );
+    /* Insert the prefix */
+    QTextCharFormat format;
+    format.setProperty( QTextFormat::FontItalic, true );
+    format.setForeground( Qt::darkBlue );
+
+    messages->textCursor().insertText( msg->module, format );
 
     switch ( msg->priority )
     {
         case VLC_MSG_INFO:
-            buf += "<font color='blue'> info: </font>";
+            format.setForeground( Qt::darkBlue );
+            messages->textCursor().insertText( " info: ", format );
             break;
         case VLC_MSG_ERR:
-            buf += "<font color='red'> error: </font>";
+            format.setForeground( Qt::darkRed );
+            messages->textCursor().insertText( " error: ", format );
             break;
         case VLC_MSG_WARN:
-            buf += "<font color='green'> warning: </font>";
+            format.setForeground( Qt::darkGreen );
+            messages->textCursor().insertText( " warning: ", format );
             break;
         case VLC_MSG_DBG:
         default:
-            buf += "<font color='grey'> debug: </font>";
+            format.setForeground( Qt::darkGray );
+            messages->textCursor().insertText( " debug: ", format );
             break;
     }
 
-    /* Insert the prefix */
-    messages->textCursor().insertHtml( buf /* + "</i>" */ );
-
     /* Insert the message */
-    messages->textCursor().insertHtml( msg->text );
+    format.setProperty( QTextFormat::FontItalic, false );
+    format.setForeground( messages->palette().foreground() );
+    messages->textCursor().insertText( msg->text, format );
 
     /* Pass the new message thru the filter */
     QTextBlock b = messages->document()->lastBlock();
     b.setVisible( matchFilter( b.text() ) );
-
-    /* Tell the QTextDocument to recompute the size of the given area */
-    messages->document()->markContentsDirty( b.position(), b.length() );
 
     if ( b_autoscroll ) messages->ensureCursorVisible();
 }
@@ -374,35 +380,32 @@ void MessagesDialog::MsgCallback( void *self, int type, const vlc_log_t *item,
 }
 
 #ifndef NDEBUG
-static QTreeWidgetItem * PLWalk( playlist_item_t *p_node )
-{
-    QTreeWidgetItem *current = new QTreeWidgetItem();
-    if(p_node->p_input)
-    {
-        current->setText( 0, qfu( p_node->p_input->psz_name ) );
-        current->setToolTip( 0, qfu( p_node->p_input->psz_uri ) );
-        current->setText( 1, QString("%1").arg( p_node->i_id ) );
-        current->setText( 2, QString("%1").arg( (uintptr_t)p_node->p_input ) );
-        current->setText( 3, QString("0x%1").arg( p_node->i_flags, 0, 16 ) );
-        current->setText( 4, QString("0x%1").arg(  p_node->p_input->i_type, 0, 16 ) );
-    }
-    for ( int i = 0; p_node->i_children > 0 && i < p_node->i_children; i++ )
-        current->addChild( PLWalk( p_node->pp_children[ i ] ) );
-    return current;
-}
 
 void MessagesDialog::updatePLTree()
 {
-    playlist_t *p_playlist = THEPL;
     pldebugTree->clear();
-
     {
-        vlc_playlist_locker pl_lock ( THEPL );
-        pldebugTree->addTopLevelItem( PLWalk( &p_playlist->root ) );
+        vlc_playlist_t* playlist = p_intf->p_sys->p_playlist;
+        vlc_playlist_Lock(playlist);
+        size_t count = vlc_playlist_Count( playlist );
+        for (size_t i = 0; i < count; i++)
+        {
+            QTreeWidgetItem *current = new QTreeWidgetItem();
+            vlc_playlist_item_t* item = vlc_playlist_Get( playlist, i );
+            input_item_t* media = vlc_playlist_item_GetMedia( item );
+            current->setText( 0, qfu( media->psz_name ) );
+            current->setToolTip( 0, qfu( media->psz_uri ) );
+            current->setText( 1, QString("%1").arg( i ) );
+            current->setText( 2, QString("%1").arg( (uintptr_t)media ) );
+            //current->setText( 3, QString("0x%1").arg( p_node->i_flags, 0, 16 ) );
+            current->setText( 3, QString("0x%1").arg( media->i_type, 0, 16 ) );
+            pldebugTree->addTopLevelItem( current );
+        }
+        vlc_playlist_Unlock(playlist);
     }
 
     pldebugTree->expandAll();
-    for ( int i=0; i< 5; i++ )
+    for ( int i=0; i< 4; i++ )
         pldebugTree->resizeColumnToContents( i );
 }
 #endif

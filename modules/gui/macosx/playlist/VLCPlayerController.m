@@ -28,11 +28,14 @@
 #import "os-integration/VLCRemoteControlService.h"
 #import "os-integration/iTunes.h"
 #import "os-integration/Spotify.h"
+
 #import "windows/video/VLCVoutView.h"
+#import "windows/video/VLCVideoWindowCommon.h"
 
 #import <MediaPlayer/MediaPlayer.h>
 
 NSString *VLCPlayerCurrentMediaItemChanged = @"VLCPlayerCurrentMediaItemChanged";
+NSString *VLCPlayerMetadataChangedForCurrentMedia = @"VLCPlayerMetadataChangedForCurrentMedia";
 NSString *VLCPlayerStateChanged = @"VLCPlayerStateChanged";
 NSString *VLCPlayerErrorChanged = @"VLCPlayerErrorChanged";
 NSString *VLCPlayerBufferFill = @"VLCPlayerBufferFill";
@@ -204,7 +207,9 @@ static void cb_player_titles_changed(vlc_player_t *p_player,
                                      void *p_data)
 {
     VLC_UNUSED(p_player);
-    vlc_player_title_list_Hold(p_titles);
+    if (p_titles)
+        vlc_player_title_list_Hold(p_titles);
+
     dispatch_async(dispatch_get_main_queue(), ^{
         VLCPlayerController *playerController = (__bridge VLCPlayerController *)p_data;
         [playerController titleListChanged:p_titles];
@@ -466,6 +471,7 @@ static const struct vlc_player_cbs player_callbacks = {
     NULL, //cb_player_item_epg_changed,
     NULL, //cb_player_subitems_changed,
     cb_player_vout_list_changed,
+    NULL, //on_cork_changed
 };
 
 #pragma mark - video specific callback implementations
@@ -668,6 +674,9 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
     }
 
     input_item_Release(inputItem);
+
+    [_defaultNotificationCenter postNotificationName:VLCPlayerMetadataChangedForCurrentMedia
+                                              object:self];
 }
 
 - (void)nextVideoFrame
@@ -1014,18 +1023,21 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
 - (void)jumpWithValue:(char *)p_userDefinedJumpSize forward:(BOOL)shallJumpForward
 {
     int64_t interval = var_InheritInteger(getIntf(), p_userDefinedJumpSize);
-    if (interval > 0) {
-        vlc_tick_t jumptime = vlc_tick_from_sec( interval );
-        if (!shallJumpForward)
-            jumptime = jumptime * -1;
+    if (interval <= 0)
+        return;
 
-        /* No fask seek for jumps. Indeed, jumps can seek to the current position
-         * if not precise enough or if the jump value is too small. */
-        vlc_player_SeekByTime(_p_player,
-                              jumptime,
-                              VLC_PLAYER_SEEK_PRECISE,
-                              VLC_PLAYER_WHENCE_RELATIVE);
-    }
+    vlc_tick_t jumptime = vlc_tick_from_sec(interval);
+    if (!shallJumpForward)
+        jumptime = jumptime * -1;
+
+    vlc_player_Lock(_p_player);
+    /* No fask seek for jumps. Indeed, jumps can seek to the current position
+     * if not precise enough or if the jump value is too small. */
+    vlc_player_SeekByTime(_p_player,
+                          jumptime,
+                          VLC_PLAYER_SEEK_PRECISE,
+                          VLC_PLAYER_WHENCE_RELATIVE);
+    vlc_player_Unlock(_p_player);
 }
 
 - (void)jumpForwardExtraShort
@@ -1566,7 +1578,7 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
 
     id currentWindow = [NSApp keyWindow];
     if ([currentWindow respondsToSelector:@selector(videoView)]) {
-        VLCVoutView *videoView = [currentWindow videoView];
+        VLCVoutView *videoView = [(VLCVideoWindowCommon *)currentWindow videoView];
         if (videoView) {
             p_vout = [videoView voutThread];
         }
@@ -1617,6 +1629,16 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
 - (void)setVideoFilterChain:(NSString *)filterChain forType:(enum vlc_vout_filter_type)filterType
 {
     vlc_player_vout_SetFilter(_p_player, filterType, filterChain != nil ? [filterChain UTF8String] : NULL);
+}
+
+- (void)setAspectRatioIsLocked:(BOOL)b_value
+{
+    config_PutInt("macosx-lock-aspect-ratio", b_value);
+}
+
+- (BOOL)aspectRatioIsLocked
+{
+    return config_GetInt("macosx-lock-aspect-ratio");
 }
 
 #pragma mark - audio specific delegation

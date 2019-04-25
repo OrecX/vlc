@@ -143,7 +143,7 @@ struct vlc_player_input
 
 struct vlc_player_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
     vlc_mutex_t lock;
     vlc_mutex_t aout_listeners_lock;
     vlc_mutex_t vout_listeners_lock;
@@ -3593,4 +3593,10 @@ error:
 
     vlc_object_delete(player);
     return NULL;
+}
+
+vlc_object_t *
+vlc_player_GetObject(vlc_player_t *player)
+{
+    return VLC_OBJECT(player);
 }

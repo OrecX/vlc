@@ -27,19 +27,23 @@
 #include "content.h"
 #include "item.h"
 #include "playlist.h"
+#include "notify.h"
 #include "libvlc.h" /* for vlc_MetadataRequest() */
 
 typedef struct VLC_VECTOR(input_item_t *) media_vector_t;
 
 static void
-vlc_playlist_CollectChildren(media_vector_t *dest, input_item_node_t *node)
+vlc_playlist_CollectChildren(vlc_playlist_t *playlist,
+                             media_vector_t *dest,
+                             input_item_node_t *node)
 {
+    vlc_playlist_AssertLocked(playlist);
     for (int i = 0; i < node->i_children; ++i)
     {
         input_item_node_t *child = node->pp_children[i];
         input_item_t *media = child->p_item;
         vlc_vector_push(dest, media);
-        vlc_playlist_CollectChildren(dest, child);
+        vlc_playlist_CollectChildren(playlist, dest, child);
     }
 }
 
@@ -50,7 +54,7 @@ vlc_playlist_ExpandItem(vlc_playlist_t *playlist, size_t index,
     vlc_playlist_AssertLocked(playlist);
 
     media_vector_t flatten = VLC_VECTOR_INITIALIZER;
-    vlc_playlist_CollectChildren(&flatten, node);
+    vlc_playlist_CollectChildren(playlist, &flatten, node);
 
     int ret = vlc_playlist_Expand(playlist, index, flatten.data, flatten.size);
     vlc_vector_destroy(&flatten);
@@ -84,22 +88,46 @@ on_subtree_added(input_item_t *media, input_item_node_t *subtree,
     vlc_playlist_Unlock(playlist);
 }
 
+static void
+on_preparse_ended(input_item_t *media,
+                  enum input_item_preparse_status status, void *userdata)
+{
+    VLC_UNUSED(media); /* retrieved by subtree->p_item */
+    vlc_playlist_t *playlist = userdata;
+
+    if (status != ITEM_PREPARSE_DONE)
+        return;
+
+    vlc_playlist_Lock(playlist);
+    ssize_t index = vlc_playlist_IndexOfMedia(playlist, media);
+    if (index != -1)
+        vlc_playlist_Notify(playlist, on_items_updated, index,
+                            &playlist->items.data[index], 1);
+    vlc_playlist_Unlock(playlist);
+}
+
 static const input_preparser_callbacks_t input_preparser_callbacks = {
+    .on_preparse_ended = on_preparse_ended,
     .on_subtree_added = on_subtree_added,
 };
 
 void
-vlc_playlist_Preparse(vlc_playlist_t *playlist, libvlc_int_t *libvlc,
-                      input_item_t *input)
+vlc_playlist_Preparse(vlc_playlist_t *playlist, input_item_t *input)
 {
 #ifdef TEST_PLAYLIST
     VLC_UNUSED(playlist);
-    VLC_UNUSED(libvlc);
     VLC_UNUSED(input);
     VLC_UNUSED(input_preparser_callbacks);
 #else
     /* vlc_MetadataRequest is not exported */
-    vlc_MetadataRequest(libvlc, input, META_REQUEST_OPTION_NONE,
+    vlc_MetadataRequest(playlist->libvlc, input, META_REQUEST_OPTION_NONE,
                         &input_preparser_callbacks, playlist, -1, NULL);
 #endif
+}
+
+void
+vlc_playlist_AutoPreparse(vlc_playlist_t *playlist, input_item_t *input)
+{
+    if (playlist->auto_preparse && !input_item_IsPreparsed(input))
+        vlc_playlist_Preparse(playlist, input);
 }

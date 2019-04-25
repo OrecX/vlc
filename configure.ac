@@ -748,7 +748,7 @@ ac_cv_type_socklen_t,
 ac_cv_type_socklen_t=yes,
 ac_cv_type_socklen_t=no)])
 AS_IF([test "$ac_cv_type_socklen_t" = no],
- [AC_DEFINE(socklen_t, int)])
+ [AC_DEFINE(socklen_t, unsigned int)])
 
 dnl Check for struct sockaddr_storage
 AH_TEMPLATE(sockaddr_storage, [Define to `sockaddr' if <sys/socket.h> does not define.]) dnl ` (fix VIM syntax highlight
@@ -3890,7 +3890,7 @@ AC_ARG_ENABLE([qt],
 ])
 have_qt5_x11="no"
 AS_IF([test "${enable_qt}" != "no"], [
-  PKG_CHECK_MODULES([QT], [Qt5Core >= 5.9.0 Qt5Widgets Qt5Gui Qt5Svg], [
+  PKG_CHECK_MODULES([QT], [Qt5Core >= 5.11.0 Qt5Widgets Qt5Gui Qt5Quick Qt5QuickWidgets Qt5QuickControls2 Qt5Svg], [
       PKG_CHECK_MODULES([QT5_X11], [Qt5X11Extras], [
           have_qt5_x11="yes"
       ],[
@@ -3902,6 +3902,10 @@ AS_IF([test "${enable_qt}" != "no"], [
       AC_PATH_PROGS(MOC, [moc-qt5 moc], moc, ["${QT_HOST_PATH}" "${QT_PATH}/bin"])
       AC_PATH_PROGS(RCC, [rcc-qt5 rcc], rcc, ["${QT_HOST_PATH}" "${QT_PATH}/bin"])
       AC_PATH_PROGS(UIC, [uic-qt5 uic], uic, ["${QT_HOST_PATH}" "${QT_PATH}/bin"])
+      AC_PATH_PROGS(QMLCACHE, [qmlcachegen-qt5 qmlcachegen], no, ["${QT_HOST_PATH}" "${QT_PATH}/bin"])
+      AS_IF([test "x${QMLCACHE}" = "xno"], [
+          AC_MSG_WARN([qmlcachegen not found])
+      ])
     ], [
       AS_IF([test -n "${enable_qt}"],[
         AC_MSG_ERROR([${QT_PKG_ERRORS}. If you want to build VLC without GUI, pass --disable-qt.])
@@ -3911,6 +3915,15 @@ AS_IF([test "${enable_qt}" != "no"], [
       enable_qt="no"
     ])
 ])
+
+AC_ARG_ENABLE([qt-qml-cache],
+  AS_HELP_STRING([--enable-qt-qml-cache],
+    [enable qml cache generation]))
+AM_CONDITIONAL([HAVE_QMLCACHE], [test "${enable_qt_qml_cache}" = "yes" && "x$QMLCACHE" != "xno"])
+
+AC_ARG_ENABLE([qt-qml-debug],
+  AS_HELP_STRING([--enable-qt-qml-debug], [enable qml debuger]))
+AM_CONDITIONAL(QT_QML_DEBUG, [test "${enable_qt_qml_debug}" = "yes"])
 
 AS_IF([test "${enable_qt}" != "no"], [
   ALIASES="${ALIASES} qvlc"
@@ -4272,7 +4285,7 @@ dnl
 AC_ARG_ENABLE([gnutls],
   AS_HELP_STRING([--enable-gnutls], [GNU TLS TLS/SSL support (default enabled)]))
 AS_IF([test "${enable_gnutls}" != "no"], [
-  PKG_CHECK_MODULES(GNUTLS, [gnutls >= 3.3.6], [
+  PKG_CHECK_MODULES(GNUTLS, [gnutls >= 3.5.0], [
     VLC_ADD_PLUGIN([gnutls])
   ], [
     AS_IF([test -n "${enable_gnutls}"], [

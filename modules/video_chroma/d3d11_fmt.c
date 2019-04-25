@@ -149,7 +149,7 @@ static HKEY GetAdapterRegistry(vlc_object_t *obj, DXGI_ADAPTER_DESC *adapterDesc
         ret = RegOpenKeyEx(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &hKey);
         if ( ret != ERROR_SUCCESS )
         {
-            msg_Warn(obj, "failed to read the %d Display Adapter registry key (%d)", i, ret);
+            msg_Warn(obj, "failed to read the %d Display Adapter registry key (%ld)", i, ret);
             return NULL;
         }
 
@@ -158,10 +158,10 @@ static HKEY GetAdapterRegistry(vlc_object_t *obj, DXGI_ADAPTER_DESC *adapterDesc
         if ( ret == ERROR_SUCCESS ) {
             if (wcsncmp(lookup, szData, wcslen(lookup)) == 0)
                 return hKey;
-            msg_Dbg(obj, "different %d device %s vs %s", i, lookup, szData);
+            msg_Dbg(obj, "different %d device %ls vs %ls", i, lookup, szData);
         }
         else
-            msg_Warn(obj, "failed to get the %d MatchingDeviceId (%d)", i, ret);
+            msg_Warn(obj, "failed to get the %d MatchingDeviceId (%ld)", i, ret);
 
         RegCloseKey(hKey);
     }
@@ -311,7 +311,7 @@ HRESULT D3D11_CreateDevice(vlc_object_t *obj, d3d11_handle_t *hd3d,
     HRESULT hr = E_NOTIMPL;
     UINT creationFlags = 0;
 
-    if (hw_decoding || !obj->obj.force)
+    if (hw_decoding || !obj->force)
         creationFlags |= D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
 #if !defined(NDEBUG)
@@ -350,7 +350,7 @@ HRESULT D3D11_CreateDevice(vlc_object_t *obj, d3d11_handle_t *hd3d,
                     driverAttempts[driver], out->feature_level);
             D3D11_GetDriverVersion( obj, out );
             /* we can work with legacy levels but only if forced */
-            if ( obj->obj.force || out->feature_level >= D3D_FEATURE_LEVEL_11_0 )
+            if ( obj->force || out->feature_level >= D3D_FEATURE_LEVEL_11_0 )
                 break;
             msg_Dbg(obj, "Incompatible feature level %x", out->feature_level);
             ID3D11DeviceContext_Release(out->d3dcontext);

@@ -291,6 +291,7 @@ static int net_SetMcastOut (vlc_object_t *p_this, int fd, int family,
 }
 
 
+#ifdef MCAST_JOIN_GROUP
 static unsigned var_GetIfIndex (vlc_object_t *obj)
 {
     char *ifname = var_InheritString (obj, "miface");
@@ -303,6 +304,7 @@ static unsigned var_GetIfIndex (vlc_object_t *obj)
     free (ifname);
     return ifindex;
 }
+#endif
 
 
 /**
@@ -332,7 +334,7 @@ net_SourceSubscribe (vlc_object_t *obj, int fd,
             const struct sockaddr_in6 *g6 = (const struct sockaddr_in6 *)grp;
 
             level = SOL_IPV6;
-            assert (grplen >= sizeof (struct sockaddr_in6));
+            assert(grplen >= (socklen_t)sizeof (struct sockaddr_in6));
             if (g6->sin6_scope_id != 0)
                 gsr.gsr_interface = g6->sin6_scope_id;
             break;
@@ -346,9 +348,9 @@ net_SourceSubscribe (vlc_object_t *obj, int fd,
             return -1;
     }
 
-    assert (grplen <= sizeof (gsr.gsr_group));
+    assert(grplen <= (socklen_t)sizeof (gsr.gsr_group));
     memcpy (&gsr.gsr_source, src, srclen);
-    assert (srclen <= sizeof (gsr.gsr_source));
+    assert(srclen <= (socklen_t)sizeof (gsr.gsr_source));
     memcpy (&gsr.gsr_group,  grp, grplen);
     if (setsockopt (fd, level, MCAST_JOIN_SOURCE_GROUP,
                     &gsr, sizeof (gsr)) == 0)
@@ -370,9 +372,9 @@ net_SourceSubscribe (vlc_object_t *obj, int fd,
             struct ip_mreq_source imr;
 
             memset (&imr, 0, sizeof (imr));
-            assert (grplen >= sizeof (struct sockaddr_in));
+            assert(grplen >= (socklen_t)sizeof (struct sockaddr_in));
             imr.imr_multiaddr = ((const struct sockaddr_in *)grp)->sin_addr;
-            assert (srclen >= sizeof (struct sockaddr_in));
+            assert(srclen >= (socklen_t)sizeof (struct sockaddr_in));
             imr.imr_sourceaddr = ((const struct sockaddr_in *)src)->sin_addr;
             if (setsockopt (fd, SOL_IP, IP_ADD_SOURCE_MEMBERSHIP,
                             &imr, sizeof (imr)) == 0)
@@ -413,7 +415,7 @@ static int net_Subscribe(vlc_object_t *obj, int fd,
             const struct sockaddr_in6 *g6 = (const struct sockaddr_in6 *)grp;
 
             level = SOL_IPV6;
-            assert (grplen >= sizeof (struct sockaddr_in6));
+            assert(grplen >= (socklen_t)sizeof (struct sockaddr_in6));
             if (g6->sin6_scope_id != 0)
                 gr.gr_interface = g6->sin6_scope_id;
             break;
@@ -427,7 +429,7 @@ static int net_Subscribe(vlc_object_t *obj, int fd,
             return -1;
     }
 
-    assert (grplen <= sizeof (gr.gr_group));
+    assert(grplen <= (socklen_t)sizeof (gr.gr_group));
     memcpy (&gr.gr_group, grp, grplen);
     if (setsockopt (fd, level, MCAST_JOIN_GROUP, &gr, sizeof (gr)) == 0)
         return 0;
@@ -442,7 +444,7 @@ static int net_Subscribe(vlc_object_t *obj, int fd,
             const struct sockaddr_in6 *g6 = (const struct sockaddr_in6 *)grp;
 
             memset (&ipv6mr, 0, sizeof (ipv6mr));
-            assert (grplen >= sizeof (struct sockaddr_in6));
+            assert(grplen >= (socklen_t)sizeof (struct sockaddr_in6));
             ipv6mr.ipv6mr_multiaddr = g6->sin6_addr;
             ipv6mr.ipv6mr_interface = g6->sin6_scope_id;
             if (!setsockopt (fd, SOL_IPV6, IPV6_JOIN_GROUP,
@@ -457,7 +459,7 @@ static int net_Subscribe(vlc_object_t *obj, int fd,
             struct ip_mreq imr;
 
             memset (&imr, 0, sizeof (imr));
-            assert (grplen >= sizeof (struct sockaddr_in));
+            assert(grplen >= (socklen_t)sizeof (struct sockaddr_in));
             imr.imr_multiaddr = ((const struct sockaddr_in *)grp)->sin_addr;
             if (setsockopt (fd, SOL_IP, IP_ADD_MEMBERSHIP,
                             &imr, sizeof (imr)) == 0)

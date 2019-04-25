@@ -336,6 +336,7 @@ picture_pool_Wait
 picture_Reset
 picture_Setup
 plane_CopyPixels
+pl_Get
 playlist_Add
 playlist_AddExt
 playlist_AddInput
@@ -676,7 +677,6 @@ vlc_mutex_marked
 vlc_global_mutex
 vlc_object_create
 vlc_object_delete
-vlc_object_find_name
 vlc_object_typename
 vlc_object_parent
 vlc_object_Log
@@ -765,6 +765,8 @@ vout_window_New
 vout_window_Delete
 vout_window_Enable
 vout_window_Disable
+vout_window_ReportWindowed
+vout_window_ReportFullscreen
 vout_display_GetDefaultDisplaySize
 vout_display_PlacePicture
 vout_display_SendEventPicturesInvalid
@@ -936,6 +938,9 @@ vlc_player_vout_Snapshot
 vlc_playlist_item_Hold
 vlc_playlist_item_Release
 vlc_playlist_item_GetMedia
+vlc_playlist_item_GetId
+vlc_playlist_view_Count
+vlc_playlist_view_Get
 vlc_playlist_New
 vlc_playlist_Delete
 vlc_playlist_Lock
@@ -955,6 +960,7 @@ vlc_playlist_Shuffle
 vlc_playlist_Sort
 vlc_playlist_IndexOf
 vlc_playlist_IndexOfMedia
+vlc_playlist_IndexOfId
 vlc_playlist_GetPlaybackRepeat
 vlc_playlist_GetPlaybackOrder
 vlc_playlist_SetPlaybackRepeat
@@ -972,6 +978,7 @@ vlc_playlist_Stop
 vlc_playlist_Pause
 vlc_playlist_Resume
 vlc_playlist_Preparse
+vlc_playlist_Export
 vlc_intf_GetMainPlaylist
 vlc_media_source_Hold
 vlc_media_source_Release

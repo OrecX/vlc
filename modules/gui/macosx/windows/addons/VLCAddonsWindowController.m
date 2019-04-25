@@ -25,7 +25,6 @@
 #import <vlc_addons.h>
 
 #import "main/VLCMain.h"
-#import "windows/mainwindow/VLCMainWindow.h"
 #import "windows/addons/VLCAddonListItem.h"
 
 @interface VLCAddonsWindowController() <NSTableViewDataSource, NSTableViewDelegate>
@@ -264,10 +263,6 @@ static void addonChangedCallback( addons_manager_t *manager,
 - (void)addonChanged:(VLCAddonListItem *)entry
 {
     [self _refactorDataModel];
-    if (_shouldRefreshSideBarOnAddonChange) {
-        [[[VLCMain sharedInstance] mainWindow] performSelector:@selector(reloadSidebar) withObject:nil afterDelay:0.5];
-        _shouldRefreshSideBarOnAddonChange = NO;
-    }
 }
 
 #pragma mark - helpers

@@ -52,6 +52,15 @@ vlc_playlist_New(vlc_object_t *parent)
     vlc_list_init(&playlist->listeners);
     playlist->repeat = VLC_PLAYLIST_PLAYBACK_REPEAT_NONE;
     playlist->order = VLC_PLAYLIST_PLAYBACK_ORDER_NORMAL;
+    playlist->idgen = 0;
+#ifdef TEST_PLAYLIST
+    playlist->libvlc = NULL;
+    playlist->auto_preparse = false;
+#else
+    assert(parent);
+    playlist->libvlc = vlc_object_instance(parent);
+    playlist->auto_preparse = var_InheritBool(parent, "auto-preparse");
+#endif
 
     return playlist;
 }

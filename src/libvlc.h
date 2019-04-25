@@ -98,6 +98,30 @@ void vlc_ExitDestroy( vlc_exit_t * );
  */
 
 /**
+ * Initializes a VLC object.
+ *
+ * @param obj storage space for object to initialize [OUT]
+ * @param parent parent object (or NULL to initialize the root) [IN]
+ * @param type_name object type name
+ *
+ * @note The type name pointer must remain valid even after the object is
+ * deinitialized, as it might be passed by address to log message queue.
+ * Using constant string literals is appropriate.
+ *
+ * @retval 0 on success
+ * @retval -1 on (out of memory) error
+ */
+int vlc_object_init(vlc_object_t *obj, vlc_object_t *parent,
+                    const char *type_name);
+
+/**
+ * Deinitializes a VLC object.
+ *
+ * This frees resources allocated by vlc_object_init().
+ */
+void vlc_object_deinit(vlc_object_t *obj);
+
+/**
  * Creates a VLC object.
  *
  * Note that because the object name pointer must remain valid, potentially
@@ -178,11 +202,11 @@ typedef struct libvlc_priv_t
     libvlc_int_t       public_data;
 
     /* Singleton objects */
+    vlc_mutex_t lock; ///< protect playlist and interfaces
     vlm_t             *p_vlm;  ///< the VLM singleton (or NULL)
     vlc_dialog_provider *p_dialog_provider; ///< dialog provider
     vlc_keystore      *p_memory_keystore; ///< memory keystore
     intf_thread_t *interfaces;  ///< Linked-list of interfaces
-    struct playlist_t *playlist; ///< Playlist for interfaces
     vlc_playlist_t *main_playlist;
     struct input_preparser_t *parser; ///< Input item meta data handler
     vlc_media_source_provider_t *media_source_provider;

@@ -36,6 +36,13 @@ NS_ASSUME_NONNULL_BEGIN
 extern NSString *VLCPlayerCurrentMediaItemChanged;
 
 /**
+ * Listen to VLCPlayerMetadataChangedForCurrentMedia to be notified if metadata such as title, artwork, etc change
+ * for the media item currently played
+ * @note the affected player object will be the object of the notification
+ */
+extern NSString *VLCPlayerMetadataChangedForCurrentMedia;
+
+/**
  * Listen to VLCPlayerStateChanged to be notified if the player's state changes
  * @note the affected player object will be the object of the notification
  */
@@ -795,6 +802,11 @@ extern NSString *VLCPlayerMuteChanged;
  * @note This is a temporary API and will be gone in VLC 5.0
  */
 - (void)setVideoFilterChain:(nullable NSString *)filterChain forType:(enum vlc_vout_filter_type)filterType;
+
+/**
+ * defines whether the vout windows lock on the video's AR or can be resized arbitrarily
+ */
+@property (nonatomic, readwrite) BOOL aspectRatioIsLocked;
 
 #pragma mark - audio output properties
 

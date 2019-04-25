@@ -36,6 +36,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (readwrite, weak) IBOutlet NSCollectionView *libraryCollectionView;
 @property (readwrite, weak) IBOutlet NSTableView *playlistTableView;
 
+@property (readonly) BOOL nativeFullscreenMode;
+@property (readwrite) BOOL nonembedded;
+
+- (void)videoPlaybackWillBeStarted;
+- (void)enableVideoPlaybackAppearance;
+- (void)disableVideoPlaybackAppearance;
+
 - (IBAction)playlistDoubleClickAction:(id)sender;
 
 @end

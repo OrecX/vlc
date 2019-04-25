@@ -42,8 +42,7 @@
 #include <vlc_url.h>
 #include <vlc_variables.h>
 
-#import "coreinteraction/VLCCoreInteraction.h"
-#import "coreinteraction/VLCInputManager.h"
+#import "coreinteraction/VLCHotkeysController.h"
 
 #import "library/VLCLibraryWindow.h"
 
@@ -52,6 +51,8 @@
 #import "main/VLCApplication.h"
 
 #import "menus/VLCMainMenu.h"
+
+#import "os-integration/VLCClickerManager.h"
 
 #import "panels/dialogs/VLCResumeDialogController.h"
 #import "panels/dialogs/VLCCoreDialogProvider.h"
@@ -64,6 +65,7 @@
 #import "playlist/VLCPlaylistController.h"
 #import "playlist/VLCPlayerController.h"
 #import "playlist/VLCPlaylistModel.h"
+#import "playlist/VLCPlaybackContinuityController.h"
 
 #import "preferences/prefs.h"
 #import "preferences/VLCSimplePrefsController.h"
@@ -105,7 +107,7 @@ int OpenIntf (vlc_object_t *p_this)
             [VLCMain sharedInstance];
 
             [[NSBundle mainBundle] loadNibNamed:@"MainMenu" owner:[[VLCMain sharedInstance] mainMenu] topLevelObjects:nil];
-            [[[VLCMain sharedInstance] mainWindow] makeKeyAndOrderFront:nil];
+            [[[VLCMain sharedInstance] libraryWindow] makeKeyAndOrderFront:nil];
 
             msg_Dbg(p_intf, "Finished loading macosx interface");
             return VLC_SUCCESS;
@@ -141,16 +143,30 @@ static int ShowController(vlc_object_t *p_this, const char *psz_variable,
     @autoreleasepool {
         dispatch_async(dispatch_get_main_queue(), ^{
 
-            intf_thread_t * p_intf = getIntf();
+            intf_thread_t *p_intf = getIntf();
             if (p_intf) {
                 VLCMain *mainInstance = [VLCMain sharedInstance];
-                if ([[[mainInstance playlistController] playerController] fullscreen])
-                    [mainInstance showFullscreenController];
-
-                else if (!strcmp(psz_variable, "intf-show"))
-                    [[mainInstance mainWindow] makeKeyAndOrderFront:nil];
+                if ([[[mainInstance playlistController] playerController] fullscreen]) {
+                    [[NSNotificationCenter defaultCenter] postNotificationName:VLCVideoWindowShouldShowFullscreenController
+                                                                        object:mainInstance];
+                } else if (!strcmp(psz_variable, "intf-show")) {
+                    [[mainInstance libraryWindow] makeKeyAndOrderFront:nil];
+                }
             }
 
+        });
+
+        return VLC_SUCCESS;
+    }
+}
+
+static int BossCallback(vlc_object_t *p_this, const char *psz_var,
+                        vlc_value_t oldval, vlc_value_t new_val, void *param)
+{
+    @autoreleasepool {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[[VLCMain sharedInstance] playlistController] pausePlayback];
+            [[NSApplication sharedApplication] hide:nil];
         });
 
         return VLC_SUCCESS;
@@ -170,7 +186,6 @@ static int ShowController(vlc_object_t *p_this, const char *psz_variable,
 
     BOOL b_active_videoplayback;
 
-    NSWindowController *_mainWindowController;
     VLCMainMenu *_mainmenu;
     VLCPrefs *_prefs;
     VLCSimplePrefsController *_sprefs;
@@ -178,7 +193,7 @@ static int ShowController(vlc_object_t *p_this, const char *psz_variable,
     VLCCoreDialogProvider *_coredialogs;
     VLCBookmarksWindowController *_bookmarks;
     VLCResumeDialogController *_resume_dialog;
-    VLCInputManager *_input_manager;
+    VLCPlaybackContinuityController *_continuityController;
     VLCLogWindowController *_messagePanelController;
     VLCStatusBarIcon *_statusBarIcon;
     VLCTrackSynchronizationWindowController *_trackSyncPanel;
@@ -188,6 +203,7 @@ static int ShowController(vlc_object_t *p_this, const char *psz_variable,
     VLCExtensionsManager *_extensionsManager;
     VLCInformationWindowController *_currentMediaInfoPanel;
     VLCLibraryWindowController *_libraryWindowController;
+    VLCClickerManager *_clickerManager;
 
     bool b_intf_terminating; /* Makes sure applicationWillTerminate will be called only once */
 }
@@ -227,8 +243,10 @@ static VLCMain *sharedInstance = nil;
 
         [VLCApplication sharedApplication].delegate = self;
 
+        _hotkeysController = [[VLCHotkeysController alloc] init];
+
         _playlistController = [[VLCPlaylistController alloc] initWithPlaylist:vlc_intf_GetMainPlaylist(p_intf)];
-        _input_manager = [[VLCInputManager alloc] initWithMain:self];
+        _continuityController = [[VLCPlaybackContinuityController alloc] init];
 
         // first initalize extensions dialog provider, then core dialog
         // provider which will register both at the core
@@ -240,12 +258,12 @@ static VLCMain *sharedInstance = nil;
 
         _voutProvider = [[VLCVideoOutputProvider alloc] init];
 
-        _mainWindowController = [[NSWindowController alloc] initWithWindowNibName:@"MainWindow"];
         _libraryWindowController = [[VLCLibraryWindowController alloc] initWithLibraryWindow];
 
-        // FIXME: those variables will live on the current libvlc instance now. Depends on a future patch
-        var_AddCallback(p_intf, "intf-toggle-fscontrol", ShowController, (__bridge void *)self);
-        var_AddCallback(p_intf, "intf-show", ShowController, (__bridge void *)self);
+        libvlc_int_t *libvlc = vlc_object_instance(p_intf);
+        var_AddCallback(libvlc, "intf-toggle-fscontrol", ShowController, (__bridge void *)self);
+        var_AddCallback(libvlc, "intf-show", ShowController, (__bridge void *)self);
+        var_AddCallback(libvlc, "intf-boss", BossCallback, (__bridge void *)self);
 
         // Load them here already to apply stored profiles
         _videoEffectsPanel = [[VLCVideoEffectsWindowController alloc] init];
@@ -285,6 +303,8 @@ static VLCMain *sharedInstance = nil;
 
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification
 {
+    _clickerManager = [[VLCClickerManager alloc] init];
+
 #ifdef HAVE_SPARKLE
     [[SUUpdater sharedUpdater] setDelegate:self];
 #endif
@@ -297,16 +317,11 @@ static VLCMain *sharedInstance = nil;
     if (!p_intf)
         return;
 
-    [[VLCCoreInteraction sharedInstance] updateCurrentlyUsedHotkeys];
-
     [self migrateOldPreferences];
 
     /* Handle sleep notification */
     [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self selector:@selector(computerWillSleep:)
            name:NSWorkspaceWillSleepNotification object:nil];
-
-    /* update the main window */
-    [[self mainWindow] updateWindow];
 
     // respect playlist-autostart
     if (var_GetBool(p_intf, "playlist-autostart")) {
@@ -331,7 +346,7 @@ static VLCMain *sharedInstance = nil;
         return;
     b_intf_terminating = true;
 
-    [_input_manager deinit];
+    _continuityController = nil;
 
     if (notification == nil)
         [[NSNotificationCenter defaultCenter] postNotificationName: NSApplicationWillTerminateNotification object: nil];
@@ -340,8 +355,10 @@ static VLCMain *sharedInstance = nil;
     [[self videoEffectsPanel] saveCurrentProfileAtTerminate];
     [[self audioEffectsPanel] saveCurrentProfileAtTerminate];
 
-    var_DelCallback(p_intf, "intf-toggle-fscontrol", ShowController, (__bridge void *)self);
-    var_DelCallback(p_intf, "intf-show", ShowController, (__bridge void *)self);
+    libvlc_int_t *libvlc = vlc_object_instance(p_intf);
+    var_DelCallback(libvlc, "intf-toggle-fscontrol", ShowController, (__bridge void *)self);
+    var_DelCallback(libvlc, "intf-show", ShowController, (__bridge void *)self);
+    var_DelCallback(libvlc, "intf-boss", BossCallback, (__bridge void *)self);
 
     [[NSNotificationCenter defaultCenter] removeObserver: self];
 
@@ -360,7 +377,7 @@ static VLCMain *sharedInstance = nil;
 - (void)updater:(SUUpdater *)updater willInstallUpdate:(SUAppcastItem *)update
 {
     [NSApp activateIgnoringOtherApps:YES];
-    [[VLCCoreInteraction sharedInstance] stop];
+    [_playlistController stopPlayback];
 }
 
 /* don't be enthusiastic about an update if we currently play a video */
@@ -379,7 +396,7 @@ static VLCMain *sharedInstance = nil;
 /* Triggered when the computer goes to sleep */
 - (void)computerWillSleep: (NSNotification *)notification
 {
-    [[VLCCoreInteraction sharedInstance] pause];
+    [_playlistController pausePlayback];
 }
 
 #pragma mark -
@@ -423,16 +440,9 @@ static VLCMain *sharedInstance = nil;
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)theApplication hasVisibleWindows:(BOOL)hasVisibleWindows
 {
     if (!hasVisibleWindows)
-        [[self mainWindow] makeKeyAndOrderFront:self];
+        [[self libraryWindow] makeKeyAndOrderFront:self];
 
     return YES;
-}
-
-- (void)showFullscreenController
-{
-    // defer selector here (possibly another time) to ensure that keyWindow is set properly
-    // (needed for NSApplicationDidBecomeActiveNotification)
-    [[self mainWindow] performSelectorOnMainThread:@selector(showFullscreenController) withObject:nil waitUntilDone:NO];
 }
 
 - (void)setActiveVideoPlayback:(BOOL)b_value
@@ -440,12 +450,9 @@ static VLCMain *sharedInstance = nil;
     assert([NSThread isMainThread]);
 
     b_active_videoplayback = b_value;
-    if ([self mainWindow]) {
-        [[self mainWindow] setVideoplayEnabled];
+    if ([self libraryWindow]) {
+//        [[self libraryWindow] toggleVideoPlaybackAppearance];
     }
-
-    // update sleep blockers
-    [_input_manager playbackStatusUpdated];
 }
 
 #pragma mark -
@@ -461,19 +468,14 @@ static VLCMain *sharedInstance = nil;
     return _statusBarIcon;
 }
 
-- (VLCMainWindow *)mainWindow
-{
-    return (VLCMainWindow *)[_mainWindowController window];
-}
-
 - (VLCLibraryWindowController *)libraryWindowController
 {
     return _libraryWindowController;
 }
 
-- (VLCInputManager *)inputManager
+- (VLCLibraryWindow *)libraryWindow
 {
-    return _input_manager;
+    return (VLCLibraryWindow *)_libraryWindowController.window;
 }
 
 - (VLCExtensionsManager *)extensionsManager

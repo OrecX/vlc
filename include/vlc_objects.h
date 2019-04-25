@@ -29,6 +29,8 @@
  */
 
 struct vlc_logger;
+struct vlc_object_internals;
+struct vlc_object_marker;
 
 /**
  * VLC object common members
@@ -37,9 +39,13 @@ struct vlc_logger;
  * Object also have private properties maintained by the core, see
  * \ref vlc_object_internals_t
  */
-struct vlc_common_members
+struct vlc_object_t
 {
     struct vlc_logger *logger;
+    union {
+        struct vlc_object_internals *priv;
+        struct vlc_object_marker *obj;
+    };
 
     bool no_interact;
 
@@ -62,25 +68,51 @@ struct vlc_common_members
 #if !defined(__cplusplus)
 # define VLC_OBJECT(x) \
     _Generic((x)->obj, \
-        struct vlc_common_members: (vlc_object_t *)(x) \
+        struct vlc_object_marker *: (x), \
+        default: (&((x)->obj)) \
     )
+# define vlc_object_cast(t)
 #else
-# define VLC_OBJECT(x) ((vlc_object_t *)(x))
+static inline vlc_object_t *VLC_OBJECT(vlc_object_t *o)
+{
+    return o;
+}
+
+# define vlc_object_cast(t) \
+struct t; \
+static inline struct vlc_object_t *VLC_OBJECT(struct t *d) \
+{ \
+    return (struct vlc_object_t *)d; \
+}
 #endif
 
-/*****************************************************************************
- * The vlc_object_t type. Yes, it's that simple :-)
- *****************************************************************************/
-/** The main vlc_object_t structure */
-struct vlc_object_t
-{
-    struct vlc_common_members obj;
-};
+vlc_object_cast(libvlc_int_t)
+vlc_object_cast(intf_thread_t)
+vlc_object_cast(vlc_player_t)
+vlc_object_cast(playlist_t)
+vlc_object_cast(input_thread_t)
+vlc_object_cast(stream_t)
+vlc_object_cast(decoder_t)
+vlc_object_cast(filter_t)
+vlc_object_cast(audio_output)
+vlc_object_cast(vout_thread_t)
+vlc_object_cast(vout_display_t)
+vlc_object_cast(vout_window_t)
+vlc_object_cast(sout_instance_t)
+vlc_object_cast(sout_stream_t)
+vlc_object_cast(sout_access_out_t)
+vlc_object_cast(extensions_manager_t)
+vlc_object_cast(fingerprinter_thread_t)
+vlc_object_cast(demux_meta_t)
+vlc_object_cast(xml_t)
+vlc_object_cast(services_discovery_t)
+vlc_object_cast(vlc_renderer_discovery_t)
+vlc_object_cast(vlc_medialibrary_module_t)
 
 /* The root object */
 struct libvlc_int_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 };
 
 /**
@@ -91,7 +123,6 @@ struct libvlc_int_t
  * @return the new object, or NULL on error.
  */
 VLC_API void *vlc_object_create( vlc_object_t *, size_t ) VLC_MALLOC VLC_USED;
-VLC_API vlc_object_t *vlc_object_find_name( vlc_object_t *, const char * ) VLC_USED VLC_DEPRECATED;
 
 /**
  * Drops the strong reference to an object.
@@ -127,7 +158,7 @@ VLC_API vlc_object_t *vlc_object_parent(vlc_object_t *obj) VLC_USED;
 
 static inline struct vlc_logger *vlc_object_logger(vlc_object_t *obj)
 {
-    return obj->obj.logger;
+    return obj->logger;
 }
 #define vlc_object_logger(o) vlc_object_logger(VLC_OBJECT(o))
 

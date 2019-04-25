@@ -93,8 +93,8 @@ libvlc_int_t * libvlc_InternalCreate( void )
         return NULL;
 
     priv = libvlc_priv (p_libvlc);
+    vlc_mutex_init(&priv->lock);
     priv->interfaces = NULL;
-    priv->playlist = NULL;
     priv->main_playlist = NULL;
     priv->p_vlm = NULL;
     priv->media_source_provider = NULL;
@@ -362,6 +362,20 @@ int libvlc_InternalInit( libvlc_int_t *p_libvlc, int i_argc,
         free( psz_val );
     }
 
+    /* Callbacks between interfaces */
+
+    /* Create a variable for showing the right click menu */
+    var_Create(p_libvlc, "intf-popupmenu", VLC_VAR_BOOL);
+
+    /* Create a variable for showing the fullscreen interface */
+    var_Create(p_libvlc, "intf-toggle-fscontrol", VLC_VAR_VOID);
+
+    /* Create a variable for the Boss Key */
+    var_Create(p_libvlc, "intf-boss", VLC_VAR_VOID);
+
+    /* Create a variable for showing the main interface */
+    var_Create(p_libvlc, "intf-show", VLC_VAR_VOID);
+
     return VLC_SUCCESS;
 
 error:
@@ -449,16 +463,7 @@ void libvlc_InternalDestroy( libvlc_int_t *p_libvlc )
 
     vlc_ExitDestroy( &priv->exit );
 
-#if 0
-    {
-        vlc_object_internals_t *internal = vlc_internals(p_libvlc);
-        if (atomic_load(&internal->refs) != 1)
-        {
-            fprintf(stderr, "=== vlc_object LEAKS detected ===\n");
-            DumpStructureLocked(VLC_OBJECT(p_libvlc), stderr, 0);
-        }
-    }
-#endif
+    vlc_mutex_destroy(&priv->lock);
     vlc_object_delete(p_libvlc);
 }
 

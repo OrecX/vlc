@@ -37,9 +37,13 @@ NSString *VLCPlaybackRepeatChanged = @"VLCPlaybackRepeatChanged";
 NSString *VLCPlaybackHasPreviousChanged = @"VLCPlaybackHasPreviousChanged";
 NSString *VLCPlaybackHasNextChanged = @"VLCPlaybackHasNextChanged";
 NSString *VLCPlaylistCurrentItemChanged = @"VLCPlaylistCurrentItemChanged";
+NSString *VLCPlaylistItemsAdded = @"VLCPlaylistItemsAdded";
+NSString *VLCPlaylistItemsRemoved = @"VLCPlaylistItemsRemoved";
 
 @interface VLCPlaylistController ()
 {
+    NSNotificationCenter *_defaultNotificationCenter;
+
     vlc_playlist_t *_p_playlist;
     vlc_playlist_listener_id *_playlistListenerID;
 }
@@ -196,6 +200,7 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
 {
     self = [super init];
     if (self) {
+        _defaultNotificationCenter = [NSNotificationCenter defaultCenter];
         _p_playlist = playlist;
 
         /* set initial values, further updates through callbacks */
@@ -243,6 +248,7 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
     [_playlistModel addItems:items atIndex:insertionIndex count:numberOfItems];
 
     [_playlistDataSource playlistUpdated];
+    [_defaultNotificationCenter postNotificationName:VLCPlaylistItemsAdded object:self];
 }
 
 - (void)playlistRemovedItemsAtIndex:(size_t)index count:(size_t)numberOfItems
@@ -251,6 +257,7 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
     [_playlistModel removeItemsInRange:range];
 
     [_playlistDataSource playlistUpdated];
+    [_defaultNotificationCenter postNotificationName:VLCPlaylistItemsRemoved object:self];
 }
 
 - (void)playlistUpdatedForIndex:(size_t)firstUpdatedIndex items:(vlc_playlist_item_t *const *)items count:(size_t)numberOfItems
@@ -265,32 +272,32 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
 - (void)playlistPlaybackRepeatUpdated:(enum vlc_playlist_playback_repeat)currentRepeatMode
 {
     _playbackRepeat = currentRepeatMode;
-    [[NSNotificationCenter defaultCenter] postNotificationName:VLCPlaybackRepeatChanged object:nil];
+    [_defaultNotificationCenter postNotificationName:VLCPlaybackRepeatChanged object:self];
 }
 
 - (void)playlistPlaybackOrderUpdated:(enum vlc_playlist_playback_order)currentOrder
 {
     _playbackOrder = currentOrder;
-    [[NSNotificationCenter defaultCenter] postNotificationName:VLCPlaybackOrderChanged object:nil];
+    [_defaultNotificationCenter postNotificationName:VLCPlaybackOrderChanged object:self];
 }
 
 - (void)currentPlaylistItemChanged:(size_t)index
 {
     _currentPlaylistIndex = index;
     [_playlistDataSource playlistUpdated];
-    [[NSNotificationCenter defaultCenter] postNotificationName:VLCPlaylistCurrentItemChanged object:nil];
+    [_defaultNotificationCenter postNotificationName:VLCPlaylistCurrentItemChanged object:self];
 }
 
 - (void)playlistHasPreviousItem:(BOOL)hasPrevious
 {
     _hasPreviousPlaylistItem = hasPrevious;
-    [[NSNotificationCenter defaultCenter] postNotificationName:VLCPlaybackHasPreviousChanged object:nil];
+    [_defaultNotificationCenter postNotificationName:VLCPlaybackHasPreviousChanged object:self];
 }
 
 - (void)playlistHasNextItem:(BOOL)hasNext
 {
     _hasNextPlaylistItem = hasNext;
-    [[NSNotificationCenter defaultCenter] postNotificationName:VLCPlaybackHasNextChanged object:nil];
+    [_defaultNotificationCenter postNotificationName:VLCPlaybackHasNextChanged object:self];
 }
 
 #pragma mark - controller functions for use within the UI
@@ -525,5 +532,44 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
 
     return p_input;
 }
+
+- (NSArray<VLCPlaylistExportModuleDescription *> *)availablePlaylistExportModules
+{
+    VLCPlaylistExportModuleDescription *xspf = [[VLCPlaylistExportModuleDescription alloc] init];
+    xspf.humanReadableName = _NS("XSPF playlist");
+    xspf.fileExtension = @"xspf";
+    xspf.moduleName = @"export-xspf";
+
+    VLCPlaylistExportModuleDescription *m3u = [[VLCPlaylistExportModuleDescription alloc] init];
+    m3u.humanReadableName = _NS("M3U playlist");
+    m3u.fileExtension = @"m3u";
+    m3u.moduleName = @"export-m3u";
+
+    VLCPlaylistExportModuleDescription *m3u8 = [[VLCPlaylistExportModuleDescription alloc] init];
+    m3u8.humanReadableName = _NS("M3U8 playlist");
+    m3u8.fileExtension = @"m3u8";
+    m3u8.moduleName = @"export-m3u8";
+
+    VLCPlaylistExportModuleDescription *html = [[VLCPlaylistExportModuleDescription alloc] init];
+    html.humanReadableName = _NS("HTML playlist");
+    html.fileExtension = @"html";
+    html.moduleName = @"export-html";
+
+    return @[xspf, m3u, m3u8, html];
+}
+
+- (int)exportPlaylistToPath:(NSString *)path exportModule:(VLCPlaylistExportModuleDescription *)exportModule
+{
+    vlc_playlist_Lock(_p_playlist);
+    int ret = vlc_playlist_Export(_p_playlist,
+                                  path.fileSystemRepresentation,
+                                  exportModule.moduleName.UTF8String);
+    vlc_playlist_Unlock(_p_playlist);
+    return ret;
+}
+
+@end
+
+@implementation VLCPlaylistExportModuleDescription
 
 @end

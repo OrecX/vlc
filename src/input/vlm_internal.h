@@ -47,7 +47,7 @@ typedef struct
 
 typedef struct
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
     vlm_media_t cfg;
 
     struct
@@ -74,7 +74,7 @@ typedef struct
     time_t date;
 
     /* if != 0, repeat period in seconds */
-    unsigned period;
+    time_t period;
     /* number of times you have to repeat
        i_repeat < 0 : endless repeat     */
     int i_repeat;
@@ -83,7 +83,7 @@ typedef struct
 
 struct vlm_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 
     vlc_mutex_t  lock;
     vlc_thread_t thread;

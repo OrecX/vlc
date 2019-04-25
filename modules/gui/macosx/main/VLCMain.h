@@ -40,7 +40,6 @@
 #import "extensions/misc.h"
 #import "extensions/NSString+Helpers.h"
 #import "menus/VLCStatusBarIcon.h"
-#import "windows/mainwindow/VLCMainWindow.h"
 #import "windows/video/VLCVideoOutputProvider.h"
 
 /*****************************************************************************
@@ -60,7 +59,6 @@ static NSString * VLCAppleRemoteSettingChangedNotification = @"VLCAppleRemoteSet
 @class AppleRemote;
 @class VLCInformationWindowController;
 @class VLCMainMenu;
-@class VLCInputManager;
 @class VLCResumeDialogController;
 @class VLCSimplePrefsController;
 @class VLCPrefs;
@@ -68,6 +66,7 @@ static NSString * VLCAppleRemoteSettingChangedNotification = @"VLCAppleRemoteSet
 @class VLCBookmarksWindowController;
 @class VLCOpenWindowController;
 @class VLCLogWindowController;
+@class VLCLibraryWindow;
 @class VLCLibraryWindowController;
 @class VLCTrackSynchronizationWindowController;
 @class VLCAudioEffectsWindowController;
@@ -76,6 +75,7 @@ static NSString * VLCAppleRemoteSettingChangedNotification = @"VLCAppleRemoteSet
 @class VLCExtensionsManager;
 @class VLCStatusBarIcon;
 @class VLCPlaylistController;
+@class VLCHotkeysController;
 
 @interface VLCMain : NSObject <NSWindowDelegate, NSApplicationDelegate>
 
@@ -84,19 +84,19 @@ static NSString * VLCAppleRemoteSettingChangedNotification = @"VLCAppleRemoteSet
 @property (nonatomic, readwrite) BOOL playlistUpdatedSelectorInQueue;
 @property (readonly) VLCLibraryWindowController *libraryWindowController;
 @property (readonly) VLCPlaylistController *playlistController;
+@property (readonly) VLCHotkeysController *hotkeysController;
 
 + (VLCMain *)sharedInstance;
 + (void)killInstance;
 
 - (VLCMainMenu *)mainMenu;
-- (VLCMainWindow *)mainWindow;
+- (VLCLibraryWindow *)libraryWindow;
 - (VLCBookmarksWindowController *)bookmarks;
 - (VLCOpenWindowController *)open;
 - (VLCSimplePrefsController *)simplePreferences;
 - (VLCPrefs *)preferences;
 - (VLCCoreDialogProvider *)coreDialogProvider;
 - (VLCResumeDialogController *)resumeDialog;
-- (VLCInputManager *)inputManager;
 - (VLCExtensionsManager *)extensionsManager;
 - (VLCStatusBarIcon *)statusBarIcon;
 
@@ -113,8 +113,6 @@ static NSString * VLCAppleRemoteSettingChangedNotification = @"VLCAppleRemoteSet
 - (void)setActiveVideoPlayback:(BOOL)b_value;
 - (BOOL)activeVideoPlayback;
 - (void)applicationWillTerminate:(NSNotification *)notification;
-
-- (void)showFullscreenController;
 
 - (BOOL)isTerminating;
 
