@@ -58,6 +58,7 @@ static const struct
     /* media mime */
     { ".avi",   "video/avi" },
     { ".asf",   "video/x-ms-asf" },
+    { ".fbs",   "video/fbs" },
     { ".m1a",   "audio/mpeg" },
     { ".m2a",   "audio/mpeg" },
     { ".m1v",   "video/mpeg" },
