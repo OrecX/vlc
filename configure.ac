@@ -2308,6 +2308,17 @@ PKG_WITH_MODULES([MATROSKA], [libebml libmatroska], [
 AM_CONDITIONAL([HAVE_MATROSKA], [test "${have_matroska}" = "yes"])
 
 dnl
+dnl  fbs demux plugin
+dnl
+PKG_WITH_MODULES([FBS], [
+       VLC_ADD_PLUGIN([fbs])
+       VLC_ADD_CFLAGS([fbs])
+       VLC_ADD_LIBS([fbs], [$FBS_LIBS])
+       have_fbs="yes"
+   ],,[FBS format support], [auto])
+AM_CONDITIONAL([HAVE_FBS], [test "${have_fbs}" = "yes"])
+
+dnl
 dnl  modplug demux plugin
 dnl
 AC_ARG_ENABLE([mod],

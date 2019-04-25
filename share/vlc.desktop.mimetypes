@@ -42,6 +42,7 @@ video/msvideo
 video/vnd.divx
 video/avi
 video/x-avi
+video/fbs
 
 # Real audio and video
 application/vnd.rn-realmedia     # RM
