@@ -76,7 +76,7 @@ typedef struct {
 } FbsPixelFormat;
 
 typedef struct {
-    int frame_size;
+    uint64_t frame_size;
     es_out_id_t *p_es_video;
     es_format_t fmt_video;
     date_t pcr;
@@ -92,7 +92,6 @@ typedef struct {
     FbsPixelFormat *fbsPixelFormat;
 } demux_sys_t;
 
-static block_t *p_block;
 static uint8_t *canvas;
 static int Demux(demux_t *);
 static int Control(demux_t *, int, va_list);
@@ -113,6 +112,8 @@ void handlePlainRLEPixels(const uint8_t bitsPerPixel, const uint8_t* data, uint6
         const uint8_t tileWidth, const uint8_t tileHeight);
 void populateColorArray(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos,
         uint8_t colorArray[], const uint16_t paletteSize);
+void prepareCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
+        const uint16_t frameBufferWidth, const uint64_t frameSize);
 int readLastTimestamp(const char *);
 uint32_t readPixel(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos);
 void resetZStream();
@@ -138,12 +139,10 @@ static int Open(vlc_object_t * p_this) {
         return VLC_EGENERIC;
     }
     if (strncmp((char*) &p_peek[0], "FBS 001.000", 11)) {
-        // file invalid
-        return VLC_EGENERIC;
+        return VLC_EGENERIC; // file invalid
     }
 
     std::string header((char*) &p_peek[0], 2000);
-
     p_sys->fbsPixelFormat = new FbsPixelFormat();
     uint64_t pos = 12;
     for (int frameNo = 1; frameNo < 6; frameNo++) {
@@ -200,10 +199,10 @@ static int Open(vlc_object_t * p_this) {
     p_demux->pf_demux = Demux;
     p_demux->pf_control = Control;
     p_sys->canvasLength = p_sys->frameBufferWidth * p_sys->frameBufferHeight * 3;
-    canvas = (uint8_t*) malloc(p_sys->canvasLength);
     resetZStream();
     // skip to data
     readBytes = vlc_stream_Read(p_demux->s, NULL, pos);
+    canvas = (uint8_t*) malloc(p_sys->canvasLength);
     return VLC_SUCCESS;
 }
 
@@ -214,7 +213,6 @@ static void Close(vlc_object_t *p_this) {
     demux_t *p_demux = (demux_t*) p_this;
     demux_sys_t *p_sys = (demux_sys_t*) p_demux->p_sys;
     delete p_sys;
-    delete p_block;
     delete canvas;
 }
 
@@ -256,32 +254,20 @@ static int Control(demux_t *p_demux, int i_query, va_list args) {
  *****************************************************************************/
 static int Demux(demux_t *p_demux) {
     demux_sys_t *p_sys = (demux_sys_t *) p_demux->p_sys;
-    vlc_tick_t i_pcr = date_Get(&p_sys->pcr);
-    es_out_SetPCR(p_demux->out, i_pcr);
-
+    vlc_tick_t pcr = date_Get(&p_sys->pcr);
+    es_out_SetPCR(p_demux->out, pcr);
     uint8_t bitsPerPixel = p_sys->fbsPixelFormat->bitsPerPixel;
     uint16_t frameBufferWidth = p_sys->frameBufferWidth;
-
-    while (p_sys->timestamp <= i_pcr / 1000 && !p_sys->seeking) {
-        p_block = vlc_stream_Block(p_demux->s, 4);
-        if (p_block == NULL) {
-            return VLC_DEMUXER_EOF;
-        }
-        int dataLength = U32_AT(&p_block->p_buffer[0]);
-        int paddedDataLength = 4 * ((dataLength + 3) / 4);
-        p_block = vlc_stream_Block(p_demux->s,
-                paddedDataLength + /*timestamp*/4);
-        p_block->i_size = p_sys->frame_size + BLOCK_ALIGN + 2 * BLOCK_PADDING;
+    while (p_sys->timestamp <= pcr / 1000 && !p_sys->seeking) {
+        prepareCanvas(p_demux, bitsPerPixel, frameBufferWidth, p_sys->frame_size);
+        block_t *p_block = block_Alloc(p_sys->frame_size);
         p_block->i_buffer = p_sys->frame_size;
-        p_sys->timestamp = U32_AT(&p_block->p_buffer[paddedDataLength]);
-        handleFrame(bitsPerPixel, frameBufferWidth, p_block->p_buffer);
-        p_block->p_buffer = canvas;
-        p_block->i_dts = p_block->i_pts = i_pcr;
+        memcpy(p_block->p_buffer, canvas, p_sys->frame_size);
+        p_block->i_dts = p_block->i_pts = p_sys->timestamp * 1000;
         es_out_Send(p_demux->out, p_sys->p_es_video, p_block);
     }
     p_sys->pcr.i_divider_num = p_sys->framesPerSecond; //how many times in a second Demux() is called
     p_sys->pcr.i_divider_den = 1;
-
     date_Increment(&p_sys->pcr, 1);
     return VLC_DEMUXER_SUCCESS;
 }
@@ -302,22 +288,13 @@ static int Seek(demux_t *p_demux, vlc_tick_t i_date) {
     uint8_t bitsPerPixel = p_sys->fbsPixelFormat->bitsPerPixel;
     uint16_t frameBufferWidth = p_sys->frameBufferWidth;
     while (p_sys->timestamp <= soughtTimestamp) {
-        p_block = vlc_stream_Block(p_demux->s, 4);
-        if (p_block == NULL) {
-            return VLC_DEMUXER_EOF;
-        }
-        uint32_t dataLength = U32_AT(p_block->p_buffer);
-        uint32_t paddedDataLength = 4 * ((dataLength + 3) / 4);
-        p_block = vlc_stream_Block(p_demux->s,
-                paddedDataLength + /*timestamp*/4);
-        p_block->i_size = p_sys->frame_size + BLOCK_ALIGN + 2 * BLOCK_PADDING;
-        p_block->i_buffer = p_sys->frame_size;
-        p_sys->timestamp = U32_AT(&p_block->p_buffer[paddedDataLength]);
-        handleFrame(bitsPerPixel, frameBufferWidth, p_block->p_buffer);
-        p_block->p_buffer = canvas;
-        p_block->i_dts = p_block->i_pts = p_sys->timestamp * 1000; //i_pcr;
-        es_out_Send(p_demux->out, p_sys->p_es_video, p_block);
+        prepareCanvas(p_demux, bitsPerPixel, frameBufferWidth, p_sys->frame_size);
     }
+    block_t *p_block = block_Alloc(p_sys->frame_size);
+    p_block->i_buffer = p_sys->frame_size;
+    memcpy(p_block->p_buffer, canvas, p_sys->frame_size);
+    p_block->i_dts = p_block->i_pts = p_sys->timestamp * 1000;
+    es_out_Send(p_demux->out, p_sys->p_es_video, p_block);
     p_sys->seeking = false;
     p_sys->pcr.date = soughtTimestamp * 1000;
     return VLC_SUCCESS;
@@ -533,6 +510,24 @@ void populateColorArray(const uint8_t bitsPerPixel, const uint8_t* rectData, uin
         }
         break;
     }
+}
+
+void prepareCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
+        const uint16_t frameBufferWidth, const uint64_t frameSize) {
+    demux_sys_t *p_sys = (demux_sys_t *) p_demux->p_sys;
+    block_t *p_block = vlc_stream_Block(p_demux->s, 4);
+    if (p_block == NULL) {
+        return;
+    }
+    int dataLength = U32_AT(&p_block->p_buffer[0]);
+    int paddedDataLength = 4 * ((dataLength + 3) / 4);
+    block_Release(p_block);
+    p_block = vlc_stream_Block(p_demux->s, paddedDataLength + /*timestamp*/4);
+    p_block->i_size = frameSize + BLOCK_ALIGN + 2 * BLOCK_PADDING;
+    p_block->i_buffer = frameSize;
+    p_sys->timestamp = U32_AT(&p_block->p_buffer[paddedDataLength]);
+    handleFrame(bitsPerPixel, frameBufferWidth, p_block->p_buffer);
+    block_Release(p_block);
 }
 
 int readLastTimestamp(const char* filepath) {
