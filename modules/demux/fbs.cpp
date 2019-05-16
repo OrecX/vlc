@@ -23,10 +23,10 @@
 # include "config.h"
 #endif
 #include <assert.h>
-#include <fcntl.h>
 #include <memory>
 #include <vlc_common.h>
 #include <vlc_demux.h>
+#include <vlc_fs.h>
 #include <vlc_plugin.h>
 #include "zlib.h"
 
@@ -41,27 +41,21 @@
 /*****************************************************************************
  * Module descriptor
  *****************************************************************************/
-namespace fbs {
 static int Open(vlc_object_t *);
 static void Close(vlc_object_t *);
 static int Seek(demux_t *, vlc_tick_t);
-} // namespace
-
-using namespace fbs;
 vlc_module_begin ()
-set_shortname( "FBS" )
-set_description( N_("FBS stream demuxer" ) )
-set_capability( "demux", 212 )
-set_callbacks( Open, Close )
-set_category( CAT_INPUT )
-set_subcategory( SUBCAT_INPUT_DEMUX )
+    set_shortname( "FBS" )
+    set_description( N_("FBS stream demuxer" ) )
+    set_capability( "demux", 212 )
+    set_callbacks( Open, Close )
+    set_category( CAT_INPUT )
+    set_subcategory( SUBCAT_INPUT_DEMUX )
 vlc_module_end ()
 
-namespace fbs {
 /*****************************************************************************
  * Definitions of structures used by this plugin
  *****************************************************************************/
-
 typedef struct {
     uint8_t bitsPerPixel;
     uint8_t depth;
@@ -89,16 +83,16 @@ typedef struct {
     uint32_t lastTimestamp;
     uint64_t canvasLength;
     bool seeking;
-    FbsPixelFormat *fbsPixelFormat;
+    FbsPixelFormat fbsPixelFormat;
 } demux_sys_t;
 
-static uint8_t *canvas;
 static int Demux(demux_t *);
 static int Control(demux_t *, int, va_list);
 
 uint64_t inflated;
 z_stream zStream;
 uint8_t zrleTilePixels24[3 * 64 * 64]; // A tile of 64 x 64 pixels, 3 bytes per pixel
+uint8_t *canvas;
 
 void copyTileToBuffer(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth,
         const uint32_t j, const uint32_t i, const uint8_t tileWidth, const uint8_t tileHeight);
@@ -112,8 +106,6 @@ void handlePlainRLEPixels(const uint8_t bitsPerPixel, const uint8_t* data, uint6
         const uint8_t tileWidth, const uint8_t tileHeight);
 void populateColorArray(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos,
         uint8_t colorArray[], const uint16_t paletteSize);
-void prepareCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
-        const uint16_t frameBufferWidth, const uint64_t frameSize);
 int readLastTimestamp(const char *);
 uint32_t readPixel(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos);
 void resetZStream();
@@ -140,16 +132,13 @@ static int Open(vlc_object_t * p_this) {
     if (readBytes == -1) {
         return VLC_EGENERIC;
     }
-    if (strncmp((char*) &p_peek[0], "FBS 001.000", 11)) {
+    if (strncmp((char*) p_peek, "FBS 001.000", 11)) {
         return VLC_EGENERIC; // file invalid
     }
 
-    std::string header((char*) &p_peek[0], 2000);
-    p_sys->fbsPixelFormat = new FbsPixelFormat();
     uint64_t pos = 12;
-    for (int frameNo = 1; frameNo < 6; frameNo++) {
+    for (uint8_t frameNo = 1; frameNo < 6; frameNo++) {
         int dataLength = U32_AT(&p_peek[pos]);
-        std::string data = header.substr(pos + 4, dataLength);
         int paddedDataLength = 4 * ((dataLength + 3) / 4);
         if (frameNo == 1) {
             p_sys->rfbVersion = p_peek[pos + 14] - 48; // rfbVersion is either 3 or 8
@@ -161,16 +150,16 @@ static int Open(vlc_object_t * p_this) {
         if (frameNo == 4) {
             p_sys->frameBufferWidth = U16_AT(&p_peek[pos + 4]);
             p_sys->frameBufferHeight = U16_AT(&p_peek[pos + 6]);
-            p_sys->fbsPixelFormat->bitsPerPixel = p_peek[pos + 8];
-            p_sys->fbsPixelFormat->depth = p_peek[pos + 9];
-            p_sys->fbsPixelFormat->bigEndianFlag = p_peek[pos + 10];
-            p_sys->fbsPixelFormat->trueColorFlag = p_peek[pos + 11];
-            p_sys->fbsPixelFormat->redMax = U16_AT(&p_peek[pos + 12]);
-            p_sys->fbsPixelFormat->greenMax = U16_AT(&p_peek[pos + 14]);
-            p_sys->fbsPixelFormat->blueMax = U16_AT(&p_peek[pos + 16]);
-            p_sys->fbsPixelFormat->redShift = p_peek[pos + 18];
-            p_sys->fbsPixelFormat->greenShift = p_peek[pos + 19];
-            p_sys->fbsPixelFormat->blueShift = p_peek[pos + 20];
+            p_sys->fbsPixelFormat.bitsPerPixel = p_peek[pos + 8];
+            p_sys->fbsPixelFormat.depth = p_peek[pos + 9];
+            p_sys->fbsPixelFormat.bigEndianFlag = p_peek[pos + 10];
+            p_sys->fbsPixelFormat.trueColorFlag = p_peek[pos + 11];
+            p_sys->fbsPixelFormat.redMax = U16_AT(&p_peek[pos + 12]);
+            p_sys->fbsPixelFormat.greenMax = U16_AT(&p_peek[pos + 14]);
+            p_sys->fbsPixelFormat.blueMax = U16_AT(&p_peek[pos + 16]);
+            p_sys->fbsPixelFormat.redShift = p_peek[pos + 18];
+            p_sys->fbsPixelFormat.greenShift = p_peek[pos + 19];
+            p_sys->fbsPixelFormat.blueShift = p_peek[pos + 20];
         }
         pos += 4 + paddedDataLength + /* timestamp */4;
         p_sys->headerPos = pos; // used by SEEK
@@ -204,7 +193,7 @@ static int Open(vlc_object_t * p_this) {
     resetZStream();
     // skip to data
     readBytes = vlc_stream_Read(p_demux->s, NULL, pos);
-    canvas = (uint8_t*) malloc(p_sys->canvasLength);
+    canvas = new uint8_t[p_sys->canvasLength];
     return VLC_SUCCESS;
 }
 
@@ -215,7 +204,7 @@ static void Close(vlc_object_t *p_this) {
     demux_t *p_demux = (demux_t*) p_this;
     demux_sys_t *p_sys = (demux_sys_t*) p_demux->p_sys;
     delete p_sys;
-    delete canvas;
+    delete[] canvas;
 }
 
 /*****************************************************************************
@@ -258,10 +247,9 @@ static int Demux(demux_t *p_demux) {
     demux_sys_t *p_sys = (demux_sys_t *) p_demux->p_sys;
     vlc_tick_t pcr = date_Get(&p_sys->pcr);
     es_out_SetPCR(p_demux->out, pcr);
-    uint8_t bitsPerPixel = p_sys->fbsPixelFormat->bitsPerPixel;
-    uint16_t frameBufferWidth = p_sys->frameBufferWidth;
     if (!p_sys->seeking) {
-        updateCanvas(p_demux, bitsPerPixel, frameBufferWidth, p_sys->frame_size, pcr / 1000);
+        updateCanvas(p_demux, p_sys->fbsPixelFormat.bitsPerPixel,
+                p_sys->frameBufferWidth, p_sys->frame_size, pcr / 1000);
     }
     p_sys->pcr.i_divider_num = p_sys->framesPerSecond; //how many times in a second Demux() is called
     p_sys->pcr.i_divider_den = 1;
@@ -273,8 +261,7 @@ static int Seek(demux_t *p_demux, vlc_tick_t i_date) {
     demux_sys_t *p_sys = (demux_sys_t *) p_demux->p_sys;
     uint32_t soughtTimestamp = i_date * p_sys->lastTimestamp / 1000;
     // Rewind to right after the header
-    int readBytes = vlc_stream_Seek(p_demux->s, p_sys->headerPos);
-    if (readBytes == -1) {
+    if (vlc_stream_Seek(p_demux->s, p_sys->headerPos) == -1) {
         return VLC_DEMUXER_EOF;
     }
     p_sys->seeking = true;
@@ -282,9 +269,8 @@ static int Seek(demux_t *p_demux, vlc_tick_t i_date) {
     resetZStream();
 
     p_sys->timestamp = 0;
-    uint8_t bitsPerPixel = p_sys->fbsPixelFormat->bitsPerPixel;
-    uint16_t frameBufferWidth = p_sys->frameBufferWidth;
-    updateCanvas(p_demux, bitsPerPixel, frameBufferWidth, p_sys->frame_size, soughtTimestamp);
+    updateCanvas(p_demux, p_sys->fbsPixelFormat.bitsPerPixel,
+            p_sys->frameBufferWidth, p_sys->frame_size, soughtTimestamp);
     p_sys->seeking = false;
     p_sys->pcr.date = soughtTimestamp * 1000;
     return VLC_SUCCESS;
@@ -292,14 +278,10 @@ static int Seek(demux_t *p_demux, vlc_tick_t i_date) {
 
 void copyTileToBuffer(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth,
         const uint32_t x, const uint32_t y, const uint8_t tileWidth, const uint8_t tileHeight) {
-    switch (bitsPerPixel) {
-    case 8: // not supported
-        break;
-    case 16: // not supported
-        break;
-    case 32:
-        for (int i = 0; i < tileHeight; i++) {
-            for (int j = 0; j < tileWidth; j++) {
+    assert(tileWidth <= 64 && tileHeight <= 64);
+    if (bitsPerPixel == 32) {
+        for (uint8_t i = 0; i < tileHeight; i++) {
+            for (uint8_t j = 0; j < tileWidth; j++) {
                 int source = 3 * (i * tileWidth + j);
                 int position = ((y + i) * frameBufferWidth + (x + j)) * 3;
                 canvas[position + 2] = zrleTilePixels24[source];     //red;
@@ -327,11 +309,11 @@ void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, co
         const uint32_t rectDataLength = U32_AT(&data[pos]);
         pos += 4;
 
-        uint8_t* inflatedData = (uint8_t*) malloc(10 * MAX_INFLATE_SIZE_ZLIB);
+        uint8_t* inflatedData = new uint8_t[10 * MAX_INFLATE_SIZE_ZLIB];
         if (!inflatedData) {
             return;
         }
-        ssize_t size = inf(data + pos, rectDataLength, inflatedData);
+        inf(data + pos, rectDataLength, inflatedData);
 
         pos += rectDataLength;
         uint64_t inflatedDataReadPosition = 0;
@@ -349,9 +331,9 @@ void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, co
                         &inflatedDataReadPosition, colorArray, paletteSize);
                 // read palette colors
                 if (paletteSize == 1) {
-                    for (int d = j; d < j + tileHeight; d++) {
-                        for (int e = k; e < k + tileWidth; e++) {
-                            int index = (d * frameBufferWidth + e) * 3;
+                    for (uint16_t d = j; d < j + tileHeight; d++) {
+                        for (uint16_t e = k; e < k + tileWidth; e++) {
+                            uint32_t index = (d * frameBufferWidth + e) * 3;
                             canvas[index++] = colorArray[0]; //red;
                             canvas[index++] = colorArray[1]; //green;
                             canvas[index] = colorArray[2];   //blue;
@@ -379,7 +361,7 @@ void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, co
                 copyTileToBuffer(bitsPerPixel, frameBufferWidth, k, j, tileWidth, tileHeight);
             }
         }
-        delete inflatedData;
+        delete[] inflatedData;
     }
 }
 
@@ -394,7 +376,7 @@ void handlePackedPixels(const uint8_t* data, uint64_t* pos, const uint8_t tileWi
         shift = 2;
     }
     int index = 0;
-    for (int i = 0; i < tileHeight; ++i) {
+    for (uint8_t i = 0; i < tileHeight; ++i) {
         int end = index + tileWidth;
         uint8_t counter1;
         int counter2 = 0;
@@ -486,52 +468,27 @@ ssize_t inf(const uint8_t* input, const uint64_t inputLength, uint8_t *buf) {
 void populateColorArray(const uint8_t bitsPerPixel, const uint8_t* rectData, uint64_t* pos,
         uint8_t colorArray[], const uint16_t paletteSize) {
     assert(paletteSize <= 64 * 64);
-    switch (bitsPerPixel) {
-    case 8: // not supported
-        break;
-    case 16: // not supported
-        break;
-    case 32:
+    if (bitsPerPixel == 32) {
         for (uint16_t i = 0; i < paletteSize; i++) {
             uint16_t index = i * 3;
             colorArray[index++] = rectData[(*pos)++]; // red
             colorArray[index++] = rectData[(*pos)++]; // green
             colorArray[index] = rectData[(*pos)++]; // blue
         }
-        break;
     }
-}
-
-void prepareCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
-        const uint16_t frameBufferWidth, const uint64_t frameSize) {
-    demux_sys_t *p_sys = (demux_sys_t *) p_demux->p_sys;
-    block_t *p_block = vlc_stream_Block(p_demux->s, 4);
-    if (p_block == NULL) {
-        return;
-    }
-    int dataLength = U32_AT(&p_block->p_buffer[0]);
-    int paddedDataLength = 4 * ((dataLength + 3) / 4);
-    block_Release(p_block);
-    p_block = vlc_stream_Block(p_demux->s, paddedDataLength + /*timestamp*/4);
-    p_block->i_size = frameSize + BLOCK_ALIGN + 2 * BLOCK_PADDING;
-    p_block->i_buffer = frameSize;
-    p_sys->timestamp = U32_AT(&p_block->p_buffer[paddedDataLength]);
-    handleFrame(bitsPerPixel, frameBufferWidth, p_block->p_buffer);
-    block_Release(p_block);
 }
 
 int readLastTimestamp(const char* filepath) {
-    int fd;
     unsigned char c[4]; // read last 4 bytes
-    fd = open(filepath, O_RDONLY);
-    if (fd == -1) {
+    FILE *file = vlc_fopen(filepath, "rb");
+    if (!file) {
         printf("Error opening file\n");
         return -1;
     }
-    lseek(fd, -4L, SEEK_END);
-    int readBytes = read(fd, c, 4); // Read 4 bytes
-    close(fd);
-    if (readBytes == 4) {
+    fseek(file, -4, SEEK_END);
+    int bytesRead = fread(c, sizeof(char), 4, file);
+    fclose(file);
+    if (bytesRead == 4) {
         return U32_AT(&c);
     } else {
         return -1;
@@ -540,17 +497,11 @@ int readLastTimestamp(const char* filepath) {
 
 uint32_t readPixel(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos) {
     uint32_t pixel = 0;
-    switch (bitsPerPixel) {
-    case 8: // not supported
-        break;
-    case 16: // not supported
-        break;
-    case 32:
+    if (bitsPerPixel == 32) {
         uint8_t red = data[(*pos)++];
         uint8_t green = data[(*pos)++];
         uint8_t blue = data[(*pos)++];
         pixel = red << 16 | green << 8 | blue;
-        break;
     }
     return pixel;
 }
@@ -588,4 +539,3 @@ void updateCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
     p_block->i_dts = p_block->i_pts = p_sys->timestamp * 1000;
     es_out_Send(p_demux->out, p_sys->p_es_video, p_block);
 }
-} // namespace
