@@ -84,38 +84,38 @@ typedef struct {
     uint64_t canvasLength;
     bool seeking;
     FbsPixelFormat fbsPixelFormat;
+    uint64_t inflated;
+    z_stream zStream;
+    uint8_t zrleTilePixels24[3 * 64 * 64]; // A tile of 64 x 64 pixels, 3 bytes per pixel
+    uint8_t *canvas;
 } demux_sys_t;
 
 static int Demux(demux_t *);
 static int Control(demux_t *, int, va_list);
 
-uint64_t inflated;
-z_stream zStream;
-uint8_t zrleTilePixels24[3 * 64 * 64]; // A tile of 64 x 64 pixels, 3 bytes per pixel
-uint8_t *canvas;
-
-void copyTileToBuffer(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth,
+void copyTileToBuffer(const demux_sys_t *p_sys, const uint8_t bitsPerPixel, const uint16_t frameBufferWidth,
         const uint32_t j, const uint32_t i, const uint8_t tileWidth, const uint8_t tileHeight);
-void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, const uint8_t *data);
-ssize_t inf(const uint8_t* input, const uint64_t inputLength, uint8_t *buf);
-void handlePackedPixels(const uint8_t* data, uint64_t* pos, const uint8_t tileWidth,
-        const uint8_t tileHeight, const uint8_t colorArray[], const uint16_t paletteSize);
-void handlePackedRLEPixels(const uint8_t* data, uint64_t* pos, const uint8_t tileWidth,
+void handleFrame(demux_sys_t *p_sys, const uint8_t bitsPerPixel,
+        const uint16_t frameBufferWidth, const uint8_t *data);
+ssize_t inf(demux_sys_t *p_sys, const uint8_t* input, const uint64_t inputLength, uint8_t *buf);
+void handlePackedPixels(uint8_t *zrleTilePixels24, const uint8_t* data, uint64_t* pos,
+        const uint8_t tileWidth, const uint8_t tileHeight, const uint8_t colorArray[], const uint16_t paletteSize);
+void handlePackedRLEPixels(uint8_t *zrleTilePixels24, const uint8_t* data, uint64_t* pos, const uint8_t tileWidth,
         const uint8_t tileHeight, const uint8_t colorArray[]);
-void handlePlainRLEPixels(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos,
-        const uint8_t tileWidth, const uint8_t tileHeight);
+void handlePlainRLEPixels(uint8_t *zrleTilePixels24, const uint8_t bitsPerPixel, const uint8_t* data,
+        uint64_t* pos, const uint8_t tileWidth, const uint8_t tileHeight);
 void populateColorArray(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos,
         uint8_t colorArray[], const uint16_t paletteSize);
 int readLastTimestamp(const char *);
 uint32_t readPixel(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* pos);
-void resetZStream();
+void resetZStream(demux_sys_t *p_sys);
 void updateCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
         const uint16_t frameBufferWidth, const uint64_t frameSize, const uint32_t);
 
 /*****************************************************************************
  * Open: initializes FBS demux structures
  *****************************************************************************/
-static int Open(vlc_object_t * p_this) {
+static int Open(vlc_object_t *p_this) {
     demux_t *p_demux = (demux_t*) p_this;
     demux_sys_t *p_sys;
     p_demux->p_sys = p_sys = (demux_sys_t*) malloc(sizeof(demux_sys_t));
@@ -190,10 +190,10 @@ static int Open(vlc_object_t * p_this) {
     p_demux->pf_demux = Demux;
     p_demux->pf_control = Control;
     p_sys->canvasLength = p_sys->frameBufferWidth * p_sys->frameBufferHeight * 3;
-    resetZStream();
+    resetZStream(p_sys);
     // skip to data
     readBytes = vlc_stream_Read(p_demux->s, NULL, pos);
-    canvas = new uint8_t[p_sys->canvasLength];
+    p_sys->canvas = new uint8_t[p_sys->canvasLength];
     return VLC_SUCCESS;
 }
 
@@ -203,8 +203,8 @@ static int Open(vlc_object_t * p_this) {
 static void Close(vlc_object_t *p_this) {
     demux_t *p_demux = (demux_t*) p_this;
     demux_sys_t *p_sys = (demux_sys_t*) p_demux->p_sys;
+    delete[] p_sys->canvas;
     delete p_sys;
-    delete[] canvas;
 }
 
 /*****************************************************************************
@@ -266,7 +266,7 @@ static int Seek(demux_t *p_demux, vlc_tick_t i_date) {
     }
     p_sys->seeking = true;
     p_sys->pcr.i_divider_num = 0;
-    resetZStream();
+    resetZStream(p_sys);
 
     p_sys->timestamp = 0;
     updateCanvas(p_demux, p_sys->fbsPixelFormat.bitsPerPixel,
@@ -276,7 +276,7 @@ static int Seek(demux_t *p_demux, vlc_tick_t i_date) {
     return VLC_SUCCESS;
 }
 
-void copyTileToBuffer(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth,
+void copyTileToBuffer(const demux_sys_t *p_sys, const uint8_t bitsPerPixel, const uint16_t frameBufferWidth,
         const uint32_t x, const uint32_t y, const uint8_t tileWidth, const uint8_t tileHeight) {
     assert(tileWidth <= 64 && tileHeight <= 64);
     if (bitsPerPixel == 32) {
@@ -284,15 +284,16 @@ void copyTileToBuffer(const uint8_t bitsPerPixel, const uint16_t frameBufferWidt
             for (uint8_t j = 0; j < tileWidth; j++) {
                 int source = 3 * (i * tileWidth + j);
                 int position = ((y + i) * frameBufferWidth + (x + j)) * 3;
-                canvas[position + 2] = zrleTilePixels24[source];     //red;
-                canvas[position + 1] = zrleTilePixels24[source + 1]; //green;
-                canvas[position] = zrleTilePixels24[source + 2];     //blue;
+                p_sys->canvas[position + 2] = p_sys->zrleTilePixels24[source];     //red;
+                p_sys->canvas[position + 1] = p_sys->zrleTilePixels24[source + 1]; //green;
+                p_sys->canvas[position] = p_sys->zrleTilePixels24[source + 2];     //blue;
             }
         }
     }
 }
 
-void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, const uint8_t *data) {
+void handleFrame(demux_sys_t *p_sys, const uint8_t bitsPerPixel,
+        const uint16_t frameBufferWidth, const uint8_t *data) {
     // byte 1 = message type, byte 2 = padding, both can be ignored
     uint16_t rectCount = U16_AT(&data[2]);
     uint64_t pos = 4;
@@ -313,7 +314,7 @@ void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, co
         if (!inflatedData) {
             return;
         }
-        inf(data + pos, rectDataLength, inflatedData);
+        inf(p_sys, data + pos, rectDataLength, inflatedData);
 
         pos += rectDataLength;
         uint64_t inflatedDataReadPosition = 0;
@@ -334,9 +335,9 @@ void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, co
                     for (uint16_t d = j; d < j + tileHeight; d++) {
                         for (uint16_t e = k; e < k + tileWidth; e++) {
                             uint32_t index = (d * frameBufferWidth + e) * 3;
-                            canvas[index++] = colorArray[0]; //red;
-                            canvas[index++] = colorArray[1]; //green;
-                            canvas[index] = colorArray[2];   //blue;
+                            p_sys->canvas[index++] = colorArray[0]; //red;
+                            p_sys->canvas[index++] = colorArray[1]; //green;
+                            p_sys->canvas[index] = colorArray[2];   //blue;
                         }
                     }
                     continue;
@@ -344,29 +345,30 @@ void handleFrame(const uint8_t bitsPerPixel, const uint16_t frameBufferWidth, co
                 if (!runLength) {
                     if (paletteSize == 0) {
                         populateColorArray(bitsPerPixel, inflatedData, &inflatedDataReadPosition,
-                                zrleTilePixels24, tileWidth * tileHeight);
+                                p_sys->zrleTilePixels24, tileWidth * tileHeight);
                     } else {
-                        handlePackedPixels(inflatedData, &inflatedDataReadPosition, tileWidth,
-                                tileHeight, colorArray, paletteSize);
+                        handlePackedPixels(p_sys->zrleTilePixels24, inflatedData, &inflatedDataReadPosition,
+                                tileWidth, tileHeight, colorArray, paletteSize);
                     }
                 } else {
                     if (paletteSize == 0) {
-                        handlePlainRLEPixels(bitsPerPixel, inflatedData,
+                        handlePlainRLEPixels(p_sys->zrleTilePixels24, bitsPerPixel, inflatedData,
                                 &inflatedDataReadPosition, tileWidth, tileHeight);
                     } else {
-                        handlePackedRLEPixels(inflatedData, &inflatedDataReadPosition, tileWidth,
+                        handlePackedRLEPixels(p_sys->zrleTilePixels24, inflatedData, &inflatedDataReadPosition, tileWidth,
                                 tileHeight, colorArray);
                     }
                 }
-                copyTileToBuffer(bitsPerPixel, frameBufferWidth, k, j, tileWidth, tileHeight);
+                copyTileToBuffer(p_sys, bitsPerPixel, frameBufferWidth, k, j, tileWidth, tileHeight);
             }
         }
         delete[] inflatedData;
     }
 }
 
-void handlePackedPixels(const uint8_t* data, uint64_t* pos, const uint8_t tileWidth,
+void handlePackedPixels(uint8_t *zrleTilePixels24, const uint8_t* data, uint64_t* pos, const uint8_t tileWidth,
         const uint8_t tileHeight, const uint8_t colorArray[], const uint16_t paletteSize) {
+    assert(tileWidth <= 64 && tileHeight <= 64);
     uint8_t shift = 1;
     if (paletteSize > 16) {
         shift = 8;
@@ -375,11 +377,11 @@ void handlePackedPixels(const uint8_t* data, uint64_t* pos, const uint8_t tileWi
     } else if (paletteSize > 2) {
         shift = 2;
     }
-    int index = 0;
+    uint16_t index = 0;
     for (uint8_t i = 0; i < tileHeight; ++i) {
-        int end = index + tileWidth;
+        uint16_t end = index + tileWidth;
         uint8_t counter1;
-        int counter2 = 0;
+        uint16_t counter2 = 0;
         while (index < end) {
             if (counter2 == 0) {
                 counter1 = data[(*pos)++];
@@ -395,8 +397,9 @@ void handlePackedPixels(const uint8_t* data, uint64_t* pos, const uint8_t tileWi
     }
 }
 
-void handlePackedRLEPixels(const uint8_t* data, uint64_t* pos,
+void handlePackedRLEPixels(uint8_t *zrleTilePixels24, const uint8_t* data, uint64_t* pos,
         const uint8_t tileWidth, const uint8_t tileHeight, const uint8_t colorArray[]) {
+    assert(tileWidth <= 64 && tileHeight <= 64);
     uint16_t index = 0;
     uint16_t end = tileWidth * tileHeight;
     while (index < end) {
@@ -420,8 +423,8 @@ void handlePackedRLEPixels(const uint8_t* data, uint64_t* pos,
     }
 }
 
-void handlePlainRLEPixels(const uint8_t bitsPerPixel, const uint8_t* data,
-        uint64_t* pos, const uint8_t tileWidth, const uint8_t tileHeight) {
+void handlePlainRLEPixels(uint8_t *zrleTilePixels24, const uint8_t bitsPerPixel,
+        const uint8_t* data, uint64_t* pos, const uint8_t tileWidth, const uint8_t tileHeight) {
     assert(tileWidth <= 64 && tileHeight <= 64);
     uint16_t index = 0;
     uint16_t end = tileWidth * tileHeight;
@@ -443,22 +446,22 @@ void handlePlainRLEPixels(const uint8_t bitsPerPixel, const uint8_t* data,
     }
 }
 
-ssize_t inf(const uint8_t* input, const uint64_t inputLength, uint8_t *buf) {
-    zStream.avail_in = inputLength;
-    zStream.next_in = (uint8_t*) input;
+ssize_t inf(demux_sys_t *p_sys, const uint8_t* input, const uint64_t inputLength, uint8_t *buf) {
+    p_sys->zStream.avail_in = inputLength;
+    p_sys->zStream.next_in = (uint8_t*) input;
     uint8_t chunkData[MAX_INFLATE_SIZE_ZLIB];
     uint32_t count = 0;
     while(1) {
-        zStream.avail_out = MAX_INFLATE_SIZE_ZLIB;
-        zStream.next_out = chunkData;
-        int inflateResult = inflate(&zStream, Z_NO_FLUSH);
-        uint32_t numBytesLeft = zStream.total_out - inflated;
+        p_sys->zStream.avail_out = MAX_INFLATE_SIZE_ZLIB;
+        p_sys->zStream.next_out = chunkData;
+        int inflateResult = inflate(&p_sys->zStream, Z_NO_FLUSH);
+        uint32_t numBytesLeft = p_sys->zStream.total_out - p_sys->inflated;
         for (unsigned int i = 0; i < numBytesLeft; i++) {
             buf[count++] = chunkData[i];
         }
-        inflated = zStream.total_out;
-        if (inflateResult != Z_OK || zStream.avail_in == 0
-                || (zStream.avail_out != 0 && inflateResult == Z_STREAM_END)) {
+        p_sys->inflated = p_sys->zStream.total_out;
+        if (inflateResult != Z_OK || p_sys->zStream.avail_in == 0
+                || (p_sys->zStream.avail_out != 0 && inflateResult == Z_STREAM_END)) {
             break;
         }
     }
@@ -506,13 +509,13 @@ uint32_t readPixel(const uint8_t bitsPerPixel, const uint8_t* data, uint64_t* po
     return pixel;
 }
 
-void resetZStream() {
-    inflated = zStream.avail_in = 0;
-    zStream.zalloc = Z_NULL;
-    zStream.zfree = Z_NULL;
-    zStream.opaque = Z_NULL;
-    zStream.next_in = Z_NULL;
-    inflateInit(&zStream);
+void resetZStream(demux_sys_t *p_sys) {
+    p_sys->inflated = p_sys->zStream.avail_in = 0;
+    p_sys->zStream.zalloc = Z_NULL;
+    p_sys->zStream.zfree = Z_NULL;
+    p_sys->zStream.opaque = Z_NULL;
+    p_sys->zStream.next_in = Z_NULL;
+    inflateInit(&p_sys->zStream);
 }
 
 void updateCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
@@ -530,12 +533,12 @@ void updateCanvas(const demux_t *p_demux, const uint8_t bitsPerPixel,
         p_block->i_size = frameSize + BLOCK_ALIGN + 2 * BLOCK_PADDING;
         p_block->i_buffer = frameSize;
         p_sys->timestamp = U32_AT(&p_block->p_buffer[paddedDataLength]);
-        handleFrame(bitsPerPixel, frameBufferWidth, p_block->p_buffer);
+        handleFrame(p_sys, bitsPerPixel, frameBufferWidth, p_block->p_buffer);
         block_Release(p_block);
     }
     block_t *p_block = block_Alloc(p_sys->frame_size);
     p_block->i_buffer = p_sys->frame_size;
-    memcpy(p_block->p_buffer, canvas, p_sys->frame_size);
+    memcpy(p_block->p_buffer, p_sys->canvas, p_sys->frame_size);
     p_block->i_dts = p_block->i_pts = p_sys->timestamp * 1000;
     es_out_Send(p_demux->out, p_sys->p_es_video, p_block);
 }
