@@ -79,8 +79,8 @@ typedef struct {
     uint16_t frameBufferHeight;
     uint8_t framesPerSecond;
     uint16_t headerPos;
-    uint32_t timestamp;
-    uint32_t lastTimestamp;
+    vlc_tick_t timestamp;
+    vlc_tick_t lastTimestamp;
     uint64_t canvasLength;
     bool seeking;
     FbsPixelFormat fbsPixelFormat;
