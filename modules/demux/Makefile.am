@@ -134,6 +134,13 @@ libavi_plugin_la_SOURCES = demux/avi/avi.c demux/avi/libavi.c demux/avi/libavi.h
                            demux/avi/bitmapinfoheader.h
 demux_LTLIBRARIES += libavi_plugin.la
 
+libfbs_plugin_la_SOURCES = 	demux/fbs.cpp
+libfbs_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(demuxdir)'
+libfbs_plugin_la_LIBADD = $(LIBS_fbs)
+libfbs_plugin_la_LIBADD += -lz
+demux_LTLIBRARIES += libfbs_plugin.la
+demux_LTLIBRARIES += $(LTLIBfbs)
+
 libcaf_plugin_la_SOURCES = demux/caf.c
 libcaf_plugin_la_LIBADD = $(LIBM)
 demux_LTLIBRARIES += libcaf_plugin.la
