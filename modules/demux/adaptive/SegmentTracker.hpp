@@ -21,6 +21,7 @@
 #define SEGMENTTRACKER_HPP
 
 #include "StreamFormat.hpp"
+#include "playlist/Role.hpp"
 
 #include <vlc_common.h>
 #include <list>
@@ -28,6 +29,7 @@
 namespace adaptive
 {
     class ID;
+    class SharedResources;
 
     namespace http
     {
@@ -112,10 +114,15 @@ namespace adaptive
     class SegmentTracker
     {
         public:
-            SegmentTracker(AbstractAdaptationLogic *, BaseAdaptationSet *);
+            SegmentTracker(SharedResources *,
+                           AbstractAdaptationLogic *, BaseAdaptationSet *);
             ~SegmentTracker();
 
             StreamFormat getCurrentFormat() const;
+            std::list<std::string> getCurrentCodecs() const;
+            const std::string & getStreamDescription() const;
+            const std::string & getStreamLanguage() const;
+            const Role & getStreamRole() const;
             bool segmentsListReady() const;
             void reset();
             SegmentChunk* getNextChunk(bool, AbstractConnectionManager *);
@@ -138,6 +145,7 @@ namespace adaptive
             uint64_t next;
             uint64_t curNumber;
             StreamFormat format;
+            SharedResources *resources;
             AbstractAdaptationLogic *logic;
             BaseAdaptationSet *adaptationSet;
             BaseRepresentation *curRepresentation;

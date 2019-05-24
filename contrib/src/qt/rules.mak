@@ -11,8 +11,9 @@ ifdef HAVE_MACOSX
 endif
 ifdef HAVE_WIN32
 PKGS += qt
+DEPS_qt = fxc2 $(DEPS_fxc2)
 ifdef HAVE_CROSS_COMPILE
-DEPS_qt += wine-headers fxc2 $(DEPS_fxc2)
+DEPS_qt += wine-headers
 endif
 endif
 
@@ -41,11 +42,16 @@ endif
 ifdef HAVE_CROSS_COMPILE
 	$(APPLY) $(SRC)/qt/0003-allow-cross-compilation-of-angle-with-wine.patch
 else
-	cd qt-$(QT_VERSION_FULL); for i in QtFontDatabaseSupport QtWindowsUIAutomationSupport QtEventDispatcherSupport QtCore; do \
+	$(APPLY) $(SRC)/qt/0003-fix-angle-compilation.patch
+	cd $(UNPACK_DIR); for i in QtFontDatabaseSupport QtWindowsUIAutomationSupport QtEventDispatcherSupport QtCore; do \
 		sed -i -e 's,"../../../../../src,"../src,g' include/$$i/$(QT_VERSION)/$$i/private/*.h; done
 endif
 
 endif
+	$(APPLY) $(SRC)/qt/0001-qmake-Always-split-QMAKE_DEFAULT_LIBDIRS-using-with-.patch
+	
+	$(APPLY) $(SRC)/qt/0001-generate-different-pkg-config-files-for-debug-and-re.patch
+	$(APPLY) $(SRC)/qt/0001-include-MODULE_AUX_INCLUDES-in-the-generated-.pc-fil.patch
 	$(MOVE)
 
 
@@ -80,9 +86,13 @@ endif
 QT_CONFIG := -static -opensource -confirm-license -no-pkg-config \
 	-no-sql-sqlite -no-gif -qt-libjpeg -no-openssl $(QT_OPENGL) -no-dbus \
 	-no-vulkan -no-sql-odbc -no-pch \
-	-no-compile-examples -nomake examples -qt-zlib
+	-no-compile-examples -nomake examples -nomake tests -qt-zlib
 
 QT_CONFIG += -release
+
+ifeq ($(V),1)
+QT_CONFIG += -verbose
+endif
 
 ifdef HAVE_MINGW_W64
 QT_CONFIG += -no-direct2d
@@ -98,29 +108,15 @@ ENV_VARS := $(HOSTVARS) DXSDK_DIR=$(PREFIX)/bin
 	# Install tools
 	cd $< && $(MAKE) -C src sub-moc-install_subtargets sub-rcc-install_subtargets sub-uic-install_subtargets sub-qlalr-install_subtargets
 	# Install plugins
-	cd $< && $(MAKE) -C src/plugins sub-platforms-install_subtargets
+	cd $< && $(MAKE) -C src -C plugins sub-imageformats-install_subtargets sub-platforms-install_subtargets sub-styles-install_subtargets
+	$(SRC)/qt/AddStaticLink.sh "$(PREFIX)" Qt5Gui plugins/imageformats qjpeg
 ifdef HAVE_WIN32
-	cd $< && $(MAKE) -C src/plugins sub-imageformats-install_subtargets
-	mv $(PREFIX)/plugins/imageformats/libqjpeg.a $(PREFIX)/lib/
-	mv $(PREFIX)/plugins/platforms/libqwindows.a $(PREFIX)/lib/ && rm -rf $(PREFIX)/plugins
+	# Add the private include to our project (similar to using "gui-private" in a qmake project)
+	sed -i.orig -e 's#-I$${includedir}/QtGui#-I$${includedir}/QtGui -I$${includedir}/QtGui/$(QT_VERSION)/QtGui#' $(PREFIX)/lib/pkgconfig/Qt5Gui.pc
+	$(SRC)/qt/AddStaticLink.sh "$(PREFIX)" Qt5Gui plugins/platforms qwindows
 	# Vista styling
-	cd $< && $(MAKE) -C src -C plugins sub-styles-install_subtargets
-	mv $(PREFIX)/plugins/styles/libqwindowsvistastyle.a $(PREFIX)/lib/ && rm -rf $(PREFIX)/plugins
-	# Move includes to match what VLC expects
-	mkdir -p $(PREFIX)/include/QtGui/qpa
-	cp $(PREFIX)/include/QtGui/$(QT_VERSION)/QtGui/qpa/qplatformnativeinterface.h $(PREFIX)/include/QtGui/qpa
-	# Clean Qt mess
-	rm -rf $(PREFIX)/lib/libQt5Bootstrap* $</lib/libQt5Bootstrap*
-	# Fix .pc files
-	for i in Qt5Core Qt5Gui Qt5Widgets Qt5Test Qt5Network ; do $(SRC)/qt/FixQtPcFiles.sh $(PREFIX)/lib/$$i.prl $(PREFIX)/lib/pkgconfig/$$i.pc; done
-	# Fix Qt5Gui.pc file to include qwindows (QWindowsIntegrationPlugin) and platform support libraries
-	cd $(PREFIX)/lib/pkgconfig; sed -i.orig -e 's/ -lQt5Gui/ -lqwindows -lqjpeg -luxtheme -ldwmapi -lwtsapi32 -lQt5ThemeSupport -lQt5FontDatabaseSupport -lQt5EventDispatcherSupport -lQt5WindowsUIAutomationSupport -lqtfreetype -lQt5Gui/g' Qt5Gui.pc
-	# Fix Qt5Widget.pc file to include qwindowsvistastyle before Qt5Widget, as it depends on it
-	cd $(PREFIX)/lib/pkgconfig; sed -i.orig -e 's/ -lQt5Widget/ -lqwindowsvistastyle -lQt5Widget/' Qt5Widgets.pc
-	# Use ANGLE OpenGL provided by Qt
-	cd $(PREFIX)/lib/pkgconfig; sed -i.orig -e '/^Cflags:/ s#$$# -I$${includedir}/QtANGLE#' \
-		-e 's/-llibGLESv2/-llibGLESv2 -ld3d9 -ltranslator -lpreprocessor/g' Qt5Gui.pc
+	$(SRC)/qt/AddStaticLink.sh "$(PREFIX)" Qt5Widgets plugins/styles qwindowsvistastyle
 endif
 	# Install a qmake with correct paths set
-	cd $<; $(MAKE) sub-qmake-qmake-aux-pro-install_subtargets install_mkspecs
+	cd $< && $(MAKE) sub-qmake-qmake-aux-pro-install_subtargets install_mkspecs
 	touch $@

@@ -210,7 +210,9 @@ libmp4_plugin_la_SOURCES = demux/mp4/mp4.c demux/mp4/mp4.h \
                            demux/mp4/languages.h \
                            demux/mp4/heif.c demux/mp4/heif.h \
                            demux/mp4/avci.h \
-                           demux/mp4/essetup.c demux/mp4/meta.c \
+                           demux/mp4/essetup.c \
+                           demux/mp4/meta.c \
+                           demux/mp4/mpeg4.h \
                            demux/mp4/coreaudio.h \
                            demux/av1_unpack.h \
                            demux/asf/asfpacket.c demux/asf/asfpacket.h \
@@ -300,6 +302,8 @@ libadaptive_plugin_la_SOURCES = \
     demux/adaptive/playlist/ICanonicalUrl.hpp \
     demux/adaptive/playlist/Inheritables.hpp \
     demux/adaptive/playlist/Inheritables.cpp \
+    demux/adaptive/playlist/Role.hpp \
+    demux/adaptive/playlist/Role.cpp \
     demux/adaptive/playlist/Segment.cpp \
     demux/adaptive/playlist/Segment.h \
     demux/adaptive/playlist/SegmentBase.cpp \
@@ -319,6 +323,10 @@ libadaptive_plugin_la_SOURCES = \
     demux/adaptive/playlist/Url.cpp \
     demux/adaptive/playlist/Url.hpp \
     demux/adaptive/playlist/Templates.hpp \
+    demux/adaptive/encryption/CommonEncryption.cpp \
+    demux/adaptive/encryption/CommonEncryption.hpp \
+    demux/adaptive/encryption/Keyring.cpp \
+    demux/adaptive/encryption/Keyring.hpp \
     demux/adaptive/logic/AbstractAdaptationLogic.cpp \
     demux/adaptive/logic/AbstractAdaptationLogic.h \
     demux/adaptive/logic/AlwaysBestAdaptationLogic.cpp \
@@ -369,6 +377,8 @@ libadaptive_plugin_la_SOURCES = \
     demux/adaptive/PlaylistManager.h \
     demux/adaptive/SegmentTracker.cpp \
     demux/adaptive/SegmentTracker.hpp \
+    demux/adaptive/SharedResources.cpp \
+    demux/adaptive/SharedResources.hpp \
     demux/adaptive/StreamFormat.cpp \
     demux/adaptive/StreamFormat.hpp \
     demux/adaptive/Streams.cpp \
@@ -377,6 +387,8 @@ libadaptive_plugin_la_SOURCES = \
     demux/adaptive/tools/Conversions.hpp \
     demux/adaptive/tools/Conversions.cpp \
     demux/adaptive/tools/Debug.hpp \
+    demux/adaptive/tools/FormatNamespace.cpp \
+    demux/adaptive/tools/FormatNamespace.hpp \
     demux/adaptive/tools/Helper.cpp \
     demux/adaptive/tools/Helper.h \
     demux/adaptive/tools/MovingAverage.hpp \

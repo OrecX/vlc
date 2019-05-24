@@ -24,15 +24,18 @@
 #import "VLCVideoWindowCommon.h"
 
 #import "extensions/NSScreen+VLCAdditions.h"
+#import "extensions/NSString+Helpers.h"
 #import "main/CompatibilityFixes.h"
 #import "main/VLCMain.h"
 #import "windows/mainwindow/VLCControlsBarCommon.h"
-#import "windows/video/VLCVoutView.h"
 #import "windows/video/VLCFSPanelController.h"
+#import "windows/video/VLCVideoOutputProvider.h"
+#import "windows/video/VLCVoutView.h"
 #import "playlist/VLCPlaylistController.h"
 #import "playlist/VLCPlayerController.h"
 #import "library/VLCLibraryWindow.h"
 
+const CGFloat VLCVideoWindowCommonMinimalHeight = 70.;
 NSString *VLCVideoWindowShouldShowFullscreenController = @"VLCVideoWindowShouldShowFullscreenController";
 NSString *VLCVideoWindowDidEnterFullscreen = @"VLCVideoWindowDidEnterFullscreen";
 
@@ -332,8 +335,8 @@ NSString *VLCVideoWindowDidEnterFullscreen = @"VLCVideoWindowDidEnterFullscreen"
     CGFloat f_height = size.height;
     if (f_width < windowMinSize.width)
         f_width = windowMinSize.width;
-    if (f_height < f_min_video_height)
-        f_height = f_min_video_height;
+    if (f_height < VLCVideoWindowCommonMinimalHeight)
+        f_height = VLCVideoWindowCommonMinimalHeight;
 
     /* Calculate the window's new size */
     NSRect new_frame;

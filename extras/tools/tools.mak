@@ -125,10 +125,12 @@ libtool-$(LIBTOOL_VERSION).tar.gz:
 
 libtool: libtool-$(LIBTOOL_VERSION).tar.gz
 	$(UNPACK)
-	$(APPLY) libtool-2.4.2-bitcode.patch
-	$(APPLY) libtool-2.4.2-san.patch
+	(cd $(UNPACK_DIR) && chmod u+w build-aux/ltmain.sh)
+	$(APPLY) libtool-2.4.6-bitcode.patch
+	$(APPLY) libtool-2.4.6-san.patch
 	$(APPLY) libtool-2.4.6-clang-libs.patch
-	$(APPLY) libtool-2.4.2-response-files.patch
+	$(APPLY) libtool-2.4.6-response-files.patch
+	(cd $(UNPACK_DIR) && autoreconf)
 	$(MOVE)
 
 .buildlibtool: libtool .automake .help2man
@@ -199,6 +201,7 @@ automake-$(AUTOMAKE_VERSION).tar.gz:
 
 automake: automake-$(AUTOMAKE_VERSION).tar.gz
 	$(UNPACK)
+	$(APPLY) automake-clang.patch
 	$(MOVE)
 
 .buildautomake: automake .autoconf

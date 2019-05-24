@@ -25,12 +25,12 @@
 
 #include "PlaylistManager.h"
 #include "SegmentTracker.hpp"
+#include "SharedResources.hpp"
 #include "playlist/AbstractPlaylist.hpp"
 #include "playlist/BasePeriod.h"
 #include "playlist/BaseAdaptationSet.h"
 #include "playlist/BaseRepresentation.h"
 #include "http/HTTPConnectionManager.h"
-#include "http/AuthStorage.hpp"
 #include "logic/AlwaysBestAdaptationLogic.h"
 #include "logic/RateBasedAdaptationLogic.h"
 #include "logic/AlwaysLowestAdaptationLogic.hpp"
@@ -49,7 +49,7 @@ using namespace adaptive::logic;
 using namespace adaptive;
 
 PlaylistManager::PlaylistManager( demux_t *p_demux_,
-                                  AuthStorage *auth,
+                                  SharedResources *res,
                                   AbstractPlaylist *pl,
                                   AbstractStreamFactory *factory,
                                   AbstractAdaptationLogic::LogicType type ) :
@@ -61,7 +61,7 @@ PlaylistManager::PlaylistManager( demux_t *p_demux_,
              p_demux        ( p_demux_ )
 {
     currentPeriod = playlist->getFirstPeriod();
-    authStorage = auth;
+    resources = res;
     failedupdates = 0;
     b_thread = false;
     b_buffering = false;
@@ -86,7 +86,7 @@ PlaylistManager::~PlaylistManager   ()
     delete playlist;
     delete conManager;
     delete logic;
-    delete authStorage;
+    delete resources;
     vlc_cond_destroy(&waitcond);
     vlc_mutex_destroy(&lock);
     vlc_mutex_destroy(&demux.lock);
@@ -117,7 +117,7 @@ bool PlaylistManager::setupPeriod()
         BaseAdaptationSet *set = *it;
         if(set && streamFactory)
         {
-            SegmentTracker *tracker = new (std::nothrow) SegmentTracker(logic, set);
+            SegmentTracker *tracker = new SegmentTracker(resources, logic, set);
             if(!tracker)
                 continue;
 
@@ -132,18 +132,8 @@ bool PlaylistManager::setupPeriod()
             streams.push_back(st);
 
             /* Generate stream description */
-            std::list<std::string> languages;
             if(!set->getLang().empty())
-            {
-                languages = set->getLang();
-            }
-            else if(!set->getRepresentations().empty())
-            {
-                languages = set->getRepresentations().front()->getLang();
-            }
-
-            if(!languages.empty())
-                st->setLanguage(languages.front());
+                st->setLanguage(set->getLang());
 
             if(!set->description.Get().empty())
                 st->setDescription(set->description.Get());
@@ -152,11 +142,12 @@ bool PlaylistManager::setupPeriod()
     return true;
 }
 
-bool PlaylistManager::start()
+bool PlaylistManager::init()
 {
     if(!conManager &&
        !(conManager =
-         new (std::nothrow) HTTPConnectionManager(VLC_OBJECT(p_demux->s), authStorage))
+         new (std::nothrow) HTTPConnectionManager(VLC_OBJECT(p_demux->s),
+                                                  resources->getAuthStorage()))
       )
         return false;
 
@@ -169,6 +160,14 @@ bool PlaylistManager::start()
     updateControlsContentType();
     updateControlsPosition();
 
+    return true;
+}
+
+bool PlaylistManager::start()
+{
+    if(b_thread || !conManager)
+        return false;
+
     b_thread = !vlc_clone(&thread, managerThread,
                           static_cast<void *>(this), VLC_THREAD_PRIORITY_INPUT);
     if(!b_thread)
@@ -177,6 +176,11 @@ bool PlaylistManager::start()
     setBufferingRunState(true);
 
     return true;
+}
+
+bool PlaylistManager::started() const
+{
+    return b_thread;
 }
 
 void PlaylistManager::stop()
@@ -231,9 +235,19 @@ AbstractStream::buffering_status PlaylistManager::bufferize(vlc_tick_t i_nzdeadl
     {
         AbstractStream *st = (*it).st;
 
-        if (st->isDisabled() &&
-            (!st->isSelected() || !st->canActivate() || !reactivateStream(st)))
-                continue;
+        if(!st->isValid())
+            continue;
+
+        if(st->esCount())
+        {
+            if (st->isDisabled() &&
+                (!st->isSelected() || !reactivateStream(st)))
+                  continue;
+        }
+        else
+        {
+            /* initial */
+        }
 
         AbstractStream::buffering_status i_ret = st->bufferize(i_nzdeadline, i_min_buffering, i_extra_buffering);
         if(i_return != AbstractStream::buffering_ongoing) /* Buffering streams need to keep going */
@@ -291,7 +305,7 @@ void PlaylistManager::drain()
         {
             AbstractStream *st = *it;
 
-            if (st->isDisabled())
+            if (!st->isValid() || st->isDisabled())
                 continue;
 
             b_drained &= st->decodersDrained();
@@ -307,7 +321,7 @@ void PlaylistManager::drain()
 
 vlc_tick_t PlaylistManager::getResumeTime() const
 {
-    vlc_mutex_locker locker(const_cast<vlc_mutex_t *>(&demux.lock));
+    vlc_mutex_locker locker(&demux.lock);
     return demux.i_nzpcr;
 }
 
@@ -345,7 +359,7 @@ bool PlaylistManager::setPosition(vlc_tick_t time)
         for(it=streams.begin(); it!=streams.end(); ++it)
         {
             AbstractStream *st = *it;
-            if(!st->isDisabled())
+            if(st->isValid() && !st->isDisabled())
             {
                 hasValidStream = true;
                 ret &= st->setPosition(time, !real);
@@ -391,6 +405,7 @@ vlc_tick_t PlaylistManager::getFirstPlaybackTime() const
 
 vlc_tick_t PlaylistManager::getCurrentPlaybackTime() const
 {
+    vlc_mutex_locker locker(&demux.lock);
     return demux.i_nzpcr;
 }
 
@@ -410,6 +425,8 @@ bool PlaylistManager::reactivateStream(AbstractStream *stream)
 int PlaylistManager::demux_callback(demux_t *p_demux)
 {
     PlaylistManager *manager = reinterpret_cast<PlaylistManager *>(p_demux->p_sys);
+    if(!manager->started() && !manager->start())
+        return VLC_DEMUXER_EOF;
     return manager->doDemux(DEMUX_INCREMENT);
 }
 
@@ -419,13 +436,17 @@ int PlaylistManager::doDemux(vlc_tick_t increment)
     if(demux.i_nzpcr == VLC_TICK_INVALID)
     {
         bool b_dead = true;
+        bool b_all_disabled = true;
         std::vector<AbstractStream *>::const_iterator it;
         for(it=streams.begin(); it!=streams.end(); ++it)
-            b_dead &= !(*it)->canActivate();
+        {
+            b_dead &= !(*it)->isValid();
+            b_all_disabled &= (*it)->isDisabled();
+        }
         if(!b_dead)
             vlc_cond_timedwait(&demux.cond, &demux.lock, vlc_tick_now() + VLC_TICK_FROM_MS(50));
         vlc_mutex_unlock(&demux.lock);
-        return (b_dead) ? AbstractStream::status_eof : AbstractStream::status_buffering;
+        return (b_dead || b_all_disabled) ? AbstractStream::status_eof : AbstractStream::status_buffering;
     }
 
     if(demux.i_firstpcr == VLC_TICK_INVALID)
@@ -715,25 +736,26 @@ void PlaylistManager::updateControlsContentType()
 
 AbstractAdaptationLogic *PlaylistManager::createLogic(AbstractAdaptationLogic::LogicType type, AbstractConnectionManager *conn)
 {
+    vlc_object_t *obj = VLC_OBJECT(p_demux);
     AbstractAdaptationLogic *logic = NULL;
     switch(type)
     {
         case AbstractAdaptationLogic::FixedRate:
         {
             size_t bps = var_InheritInteger(p_demux, "adaptive-bw") * 8192;
-            logic = new (std::nothrow) FixedRateAdaptationLogic(bps);
+            logic = new (std::nothrow) FixedRateAdaptationLogic(obj, bps);
             break;
         }
         case AbstractAdaptationLogic::AlwaysLowest:
-            logic = new (std::nothrow) AlwaysLowestAdaptationLogic();
+            logic = new (std::nothrow) AlwaysLowestAdaptationLogic(obj);
             break;
         case AbstractAdaptationLogic::AlwaysBest:
-            logic = new (std::nothrow) AlwaysBestAdaptationLogic();
+            logic = new (std::nothrow) AlwaysBestAdaptationLogic(obj);
             break;
         case AbstractAdaptationLogic::RateBased:
         {
             RateBasedAdaptationLogic *ratelogic =
-                    new (std::nothrow) RateBasedAdaptationLogic(VLC_OBJECT(p_demux));
+                    new (std::nothrow) RateBasedAdaptationLogic(obj);
             if(ratelogic)
                 conn->setDownloadRateObserver(ratelogic);
             logic = ratelogic;
@@ -743,7 +765,7 @@ AbstractAdaptationLogic *PlaylistManager::createLogic(AbstractAdaptationLogic::L
         case AbstractAdaptationLogic::NearOptimal:
         {
             NearOptimalAdaptationLogic *noplogic =
-                    new (std::nothrow) NearOptimalAdaptationLogic();
+                    new (std::nothrow) NearOptimalAdaptationLogic(obj);
             if(noplogic)
                 conn->setDownloadRateObserver(noplogic);
             logic = noplogic;
@@ -752,7 +774,7 @@ AbstractAdaptationLogic *PlaylistManager::createLogic(AbstractAdaptationLogic::L
         case AbstractAdaptationLogic::Predictive:
         {
             AbstractAdaptationLogic *predictivelogic =
-                    new (std::nothrow) PredictiveAdaptationLogic(VLC_OBJECT(p_demux));
+                    new (std::nothrow) PredictiveAdaptationLogic(obj);
             if(predictivelogic)
                 conn->setDownloadRateObserver(predictivelogic);
             logic = predictivelogic;

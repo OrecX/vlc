@@ -12,13 +12,13 @@ NASM_URL=http://www.nasm.us/pub/nasm/releasebuilds/$(NASM_VERSION)/nasm-$(NASM_V
 CMAKE_VERSION=3.13.4
 CMAKE_URL=http://www.cmake.org/files/v3.13/cmake-$(CMAKE_VERSION).tar.gz
 
-LIBTOOL_VERSION=2.4.2
+LIBTOOL_VERSION=2.4.6
 LIBTOOL_URL=$(GNU)/libtool/libtool-$(LIBTOOL_VERSION).tar.gz
 
 AUTOCONF_VERSION=2.69
 AUTOCONF_URL=$(GNU)/autoconf/autoconf-$(AUTOCONF_VERSION).tar.gz
 
-AUTOMAKE_VERSION=1.15
+AUTOMAKE_VERSION=1.16.1
 AUTOMAKE_URL=$(GNU)/automake/automake-$(AUTOMAKE_VERSION).tar.gz
 
 M4_VERSION=1.4.18

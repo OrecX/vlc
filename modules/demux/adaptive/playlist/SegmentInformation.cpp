@@ -30,6 +30,7 @@
 #include "SegmentTimeline.h"
 #include "AbstractPlaylist.hpp"
 #include "BaseRepresentation.h"
+#include "../encryption/CommonEncryption.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -58,7 +59,6 @@ void SegmentInformation::init()
     segmentBase = NULL;
     segmentList = NULL;
     mediaSegmentTemplate = NULL;
-    switchpolicy = SWITCH_UNKNOWN;
 }
 
 SegmentInformation::~SegmentInformation()
@@ -347,11 +347,12 @@ bool SegmentInformation::getSegmentNumberByTime(vlc_tick_t time, uint64_t *ret) 
 {
     if( mediaSegmentTemplate )
     {
-        const Timescale timescale = mediaSegmentTemplate->inheritTimescale();
-
         const SegmentTimeline *timeline = mediaSegmentTemplate->inheritSegmentTimeline();
         if(timeline)
         {
+            const Timescale timescale = timeline->getTimescale().isValid()
+                                      ? timeline->getTimescale()
+                                      : mediaSegmentTemplate->inheritTimescale();
             stime_t st = timescale.ToScaled(time);
             *ret = timeline->getElementNumberByScaledPlaybackTime(st);
             return true;
@@ -366,6 +367,7 @@ bool SegmentInformation::getSegmentNumberByTime(vlc_tick_t time, uint64_t *ret) 
             }
             else
             {
+                const Timescale timescale = mediaSegmentTemplate->inheritTimescale();
                 *ret = mediaSegmentTemplate->inheritStartNumber();
                 *ret += timescale.ToScaled(time) / duration;
             }
@@ -511,12 +513,16 @@ uint64_t SegmentInformation::translateSegmentNumber(uint64_t num, const SegmentI
     return num;
 }
 
-SegmentInformation::SwitchPolicy SegmentInformation::getSwitchPolicy() const
+const CommonEncryption & SegmentInformation::intheritEncryption() const
 {
-    if(switchpolicy == SWITCH_UNKNOWN)
-        return (parent) ? parent->getSwitchPolicy() : SWITCH_UNAVAILABLE;
-    else
-        return switchpolicy;
+    if(parent && commonEncryption.method == CommonEncryption::Method::NONE)
+        return parent->intheritEncryption();
+    return commonEncryption;
+}
+
+void SegmentInformation::setEncryption(const CommonEncryption &enc)
+{
+    commonEncryption = enc;
 }
 
 vlc_tick_t SegmentInformation::getPeriodStart() const
@@ -610,11 +616,6 @@ void SegmentInformation::SplitUsingIndex(std::vector<SplitPoint> &splitlist)
         const stime_t duration = timescale.ToScaled(split.duration);
         insertIntoSegment(seglist, prevstart, split.offset - 1, prevtime, duration);
     }
-}
-
-void SegmentInformation::setSwitchPolicy(SegmentInformation::SwitchPolicy policy)
-{
-    switchpolicy = policy;
 }
 
 Url SegmentInformation::getUrlSegment() const

@@ -58,7 +58,7 @@
  * To achieve these goals, a "randomizer" stores a single vector containing all
  * the items of the playlist, along with 3 indexes.
  *
- * The whole vector is not shuffled at once: instead, steps of the Fish-Yates
+ * The whole vector is not shuffled at once: instead, steps of the Fisher-Yates
  * algorithm are executed one-by-one on demand. This has several advantages:
  *  - on insertions and removals, there is no need to reshuffle or shift the
  *    whole array;
@@ -118,7 +118,7 @@
  *            determinated range
  *
  * The playlist calls _Next() one more time. The randomizer selects C (already
- * in place). _Next() returns E.
+ * in place). _Next() returns C.
  *
  *                                          history
  *                                next      |
@@ -129,7 +129,7 @@
  *             determinated range
  *
  * The playlist then calls _Prev(). Since the "current" item is C, the previous
- * one is E, so  _Prev() returns E, and 'next' moves back.
+ * one is E, so _Prev() returns E, and 'next' moves back.
  *
  *                                          history
  *                           next           |
@@ -160,7 +160,7 @@
  *                determinated range
  *
  * The playlist calls _Next(), the randomizer selects the last item (it has no
- * choice). 'next' and 'head' now points one item past the end (their value is
+ * choice). 'next' and 'head' now point one item past the end (their value is
  * the vector size).
  *
  *                                          history
@@ -172,8 +172,8 @@
  *                  determinated range
  *
  * At this point, if loop is disabled, it is not possible to call _Next()
- * anymore (_HasNext() returns false). So let's enable it by _SetLoop(), and
- * call _Next() again.
+ * anymore (_HasNext() returns false). So let's enable it by calling
+ * _SetLoop(), then let's call _Next() again.
  *
  * This will start a new loop cycle. Firstly, 'next' and 'head' are reset, and
  * the whole vector belongs to the last cycle history.
@@ -423,18 +423,13 @@ randomizer_Next(struct randomizer *r)
 bool
 randomizer_Add(struct randomizer *r, vlc_playlist_item_t *items[], size_t count)
 {
-    if (r->history)
-    {
-        if (!vlc_vector_insert_all(&r->items, r->history, items, count))
-            return false;
-        /* the insertion shifted history (and possibly next) */
-        if (r->next > r->history)
-            r->next += count;
-        r->history += count;
-        return true;
-    }
-
-    return vlc_vector_push_all(&r->items, items, count);
+    if (!vlc_vector_insert_all(&r->items, r->history, items, count))
+        return false;
+    /* the insertion shifted history (and possibly next) */
+    if (r->next > r->history)
+        r->next += count;
+    r->history += count;
+    return true;
 }
 
 static void
@@ -488,7 +483,7 @@ randomizer_RemoveAt(struct randomizer *r, size_t index)
      *    ordered            order irrelevant               ordered
      */
 
-    /* update next before may be updated */
+    /* update next before index may be updated */
     if (index < r->next)
         r->next--;
 
@@ -502,26 +497,20 @@ randomizer_RemoveAt(struct randomizer *r, size_t index)
         index = r->head; /* the new index to remove */
     }
 
-    if (!r->history || index < r->history)
+    if (index < r->history)
     {
-        size_t swap = (r->history + r->items.size - 1) % r->items.size;
-        r->items.data[index] = r->items.data[swap];
-        index = swap;
+        /* this part is unordered, no need to shift all items */
+        r->items.data[index] = r->items.data[r->history - 1];
+        index = r->history - 1;
+        r->history--;
     }
 
-    if (r->history)
+    if (index < r->items.size - 1)
     {
+        /* shift the ordered history part by one */
         memmove(&r->items.data[index],
                 &r->items.data[index + 1],
                 (r->items.size - index - 1) * sizeof(*r->items.data));
-
-        if (index < r->history)
-            r->history--;
-        else if (r->history == r->items.size)
-            r->history = 0;
-
-        if (r->next == r->items.size)
-            r->next = 0;
     }
 
     r->items.size--;
@@ -704,7 +693,7 @@ test_all_items_selected_exactly_once_with_removals(void)
     vlc_playlist_item_t *items[SIZE];
     ArrayInit(items, SIZE);
 
-    bool ok = randomizer_Add(&randomizer, items, 100);
+    bool ok = randomizer_Add(&randomizer, items, SIZE);
     assert(ok);
 
     bool selected[SIZE] = {0};
@@ -742,6 +731,116 @@ test_all_items_selected_exactly_once_with_removals(void)
             count++;
 
     assert(count == SIZE - 10);
+
+    ArrayDestroy(items, SIZE);
+    randomizer_Destroy(&randomizer);
+    #undef SIZE
+}
+
+static void
+test_cycle_after_manual_selection(void)
+{
+    struct randomizer randomizer;
+    randomizer_Init(&randomizer);
+    randomizer_SetLoop(&randomizer, true);
+
+    #define SIZE 100
+    vlc_playlist_item_t *items[SIZE];
+    ArrayInit(items, SIZE);
+
+    bool ok = randomizer_Add(&randomizer, items, 100);
+    assert(ok);
+
+    /* force selection of the first item */
+    randomizer_Select(&randomizer, randomizer.items.data[0]);
+
+    for (int i = 0; i < 2 * SIZE; ++i)
+    {
+        assert(randomizer_HasNext(&randomizer));
+        vlc_playlist_item_t *item = randomizer_Next(&randomizer);
+        assert(item);
+    }
+
+    assert(randomizer_HasNext(&randomizer)); /* still has items in loop */
+
+    ArrayDestroy(items, SIZE);
+    randomizer_Destroy(&randomizer);
+    #undef SIZE
+}
+
+static void
+test_cycle_with_additions_and_removals(void)
+{
+    struct randomizer randomizer;
+    randomizer_Init(&randomizer);
+    randomizer_SetLoop(&randomizer, true);
+
+    #define SIZE 100
+    vlc_playlist_item_t *items[SIZE];
+    ArrayInit(items, SIZE);
+
+    bool ok = randomizer_Add(&randomizer, items, 80);
+    assert(ok);
+
+    for (int i = 0; i < 30; ++i)
+    {
+        assert(randomizer_HasNext(&randomizer));
+        vlc_playlist_item_t *item = randomizer_Next(&randomizer);
+        assert(item);
+    }
+
+    vlc_playlist_item_t *to_remove[20];
+    /* copy 10 items already selected */
+    memcpy(to_remove, &randomizer.items.data[15], 10 * sizeof(*to_remove));
+    /* copy 10 items not already selected */
+    memcpy(&to_remove[10], &randomizer.items.data[60], 10 * sizeof(*to_remove));
+
+    randomizer_Remove(&randomizer, to_remove, 20);
+
+    /* it remains 40 items in the first cycle (30 already selected, and 10
+     * removed from the 50 remaining) */
+    for (int i = 0; i < 40; ++i)
+    {
+        assert(randomizer_HasNext(&randomizer));
+        vlc_playlist_item_t *item = randomizer_Next(&randomizer);
+        assert(item);
+    }
+
+    /* the first cycle is complete */
+    assert(randomizer_HasNext(&randomizer));
+    /* force the determination of the first item of the next cycle */
+    vlc_playlist_item_t *item = randomizer_PeekNext(&randomizer);
+    assert(item);
+
+    assert(randomizer.items.size == 60);
+    assert(randomizer.history == 1);
+
+    /* save current history */
+    vlc_playlist_item_t *history[59];
+    memcpy(history, &randomizer.items.data[1], 59 * sizeof(*history));
+
+    /* insert 20 new items */
+    ok = randomizer_Add(&randomizer, &items[80], 20);
+    assert(ok);
+
+    assert(randomizer.items.size == 80);
+    assert(randomizer.history == 21);
+
+    for (int i = 0; i < 59; ++i)
+        assert(history[i] == randomizer.items.data[21 + i]);
+
+    /* remove 10 items in the history part */
+    memcpy(to_remove, &randomizer.items.data[30], 10 * sizeof(*to_remove));
+    randomizer_Remove(&randomizer, to_remove, 10);
+
+    assert(randomizer.items.size == 70);
+    assert(randomizer.history == 21);
+
+    /* the other items in the history must be kept in order */
+    for (int i = 0; i < 9; ++i)
+        assert(history[i] == randomizer.items.data[21 + i]);
+    for (int i = 0; i < 40; ++i)
+        assert(history[i + 19] == randomizer.items.data[30 + i]);
 
     ArrayDestroy(items, SIZE);
     randomizer_Destroy(&randomizer);
@@ -1116,6 +1215,8 @@ int main(void)
     test_all_items_selected_exactly_once_per_cycle();
     test_all_items_selected_exactly_once_with_additions();
     test_all_items_selected_exactly_once_with_removals();
+    test_cycle_after_manual_selection();
+    test_cycle_with_additions_and_removals();
     test_force_select_new_item();
     test_force_select_item_already_selected();
     test_prev();

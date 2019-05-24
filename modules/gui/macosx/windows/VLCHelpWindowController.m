@@ -26,6 +26,7 @@
 #import <vlc_intf_strings.h>
 #import <vlc_about.h>
 
+#import "extensions/NSString+Helpers.h"
 #import "main/CompatibilityFixes.h"
 #import "main/VLCMain.h"
 #import "views/VLCScrollingClipView.h"
@@ -63,7 +64,7 @@
                                _NS(I_LONGHELP)];
 
     [[helpWebView mainFrame] loadHTMLString:htmlWithStyle
-                                    baseURL:[NSURL URLWithString:@"http://videolan.org"]];
+                                    baseURL:[NSURL URLWithString:@"https://videolan.org"]];
 }
 
 - (void)webView:(WebView *)sender didFinishLoadForFrame:(WebFrame *)frame

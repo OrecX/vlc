@@ -35,6 +35,7 @@ usage()
 	echo "  --enable-ad-clauses configure to build packages with advertising clauses"
 	echo "                   (USE AT YOUR OWN LEGAL RISKS)"
 	echo "  --disable-optim  disable optimization in libraries"
+	echo "  --enable-pdb     generate debug information in PDB format"
 }
 
 BUILD=
@@ -49,6 +50,7 @@ GPL="1"
 GNUV3="1"
 AD_CLAUSES=
 WITH_OPTIMIZATION="1"
+ENABLE_PDB=
 
 if test ! -f "../../contrib/src/main.mak"
 then
@@ -83,6 +85,9 @@ do
 			;;
 		--disable-optim)
 			WITH_OPTIMIZATION=
+			;;
+		--enable-pdb)
+			ENABLE_PDB=1
 			;;
 		--enable-small)
 			ENABLE_SMALL=1
@@ -164,8 +169,9 @@ fi
 #
 # Prepare files
 #
-echo "Creating configuration file... config.mak"
-exec 3>config.mak || exit $?
+echo "Creating makefile..."
+test -e Makefile && unlink Makefile
+exec 3>Makefile || exit $?
 cat >&3 << EOF
 # This file was automatically generated.
 # Any change will be overwritten if ../bootstrap is run again.
@@ -265,6 +271,7 @@ test -z "$GPL" || add_make_enabled "GPL"
 test -z "$GNUV3" || add_make_enabled "GNUV3"
 test -z "$AD_CLAUSES" || add_make_enabled "AD_CLAUSES"
 test -z "$WITH_OPTIMIZATION" || add_make_enabled "WITH_OPTIMIZATION"
+test -z "$ENABLE_PDB" || add_make_enabled "ENABLE_PDB"
 test "`uname -o 2>/dev/null`" != "Msys" || add_make "CMAKE_GENERATOR := -G \"MSYS Makefiles\""
 
 #
@@ -380,8 +387,10 @@ esac
 #
 # Results output
 #
-test -e Makefile && unlink Makefile
-ln -sf ../../contrib/src/main.mak Makefile || exit $?
+echo TOPSRC = .. >> Makefile
+echo TOPSRC_BUILT = ../.. >> Makefile
+echo TOPDST = .. >> Makefile
+echo include $\(TOPSRC\)/src/main.mak >> Makefile
 echo "Bootstrap completed."
 make help
 mkdir -p ../../contrib/tarballs || exit $?

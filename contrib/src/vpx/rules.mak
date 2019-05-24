@@ -1,6 +1,6 @@
 # libvpx
 
-VPX_VERSION := 1.7.0
+VPX_VERSION := 1.8.0
 VPX_URL := http://github.com/webmproject/libvpx/archive/v${VPX_VERSION}.tar.gz
 
 PKGS += vpx
@@ -19,12 +19,8 @@ libvpx: libvpx-$(VPX_VERSION).tar.gz .sum-vpx
 	$(APPLY) $(SRC)/vpx/libvpx-ios.patch
 ifdef HAVE_ANDROID
 	$(APPLY) $(SRC)/vpx/libvpx-android.patch
-	$(APPLY) $(SRC)/vpx/libvpx-android-fix_cortex_a8-flag.patch
 	$(APPLY) $(SRC)/vpx/libvpx-android-toolchain_path.patch
 endif
-	$(APPLY) $(SRC)/vpx/0001-ads2gas-Add-a-noelf-option.patch
-	$(APPLY) $(SRC)/vpx/0002-configure-Add-an-armv7-win32-gcc-target.patch
-	$(APPLY) $(SRC)/vpx/0003-configure-Add-an-arm64-win64-gcc-target.patch
 	$(MOVE)
 
 DEPS_vpx =
@@ -164,6 +160,6 @@ endif
 	cd $< && LDFLAGS="$(VPX_LDFLAGS)" CROSS=$(VPX_CROSS) ./configure --target=$(VPX_TARGET) \
 		$(VPX_CONF) --prefix=$(PREFIX)
 	cd $< && $(MAKE)
-	cd $< && ../../../contrib/src/pkg-static.sh vpx.pc
+	$(call pkg_static,"vpx.pc")
 	cd $< && $(MAKE) install
 	touch $@

@@ -179,14 +179,22 @@ enum vlc_player_nav
 
 /**
  * Action of vlc_player_cbs.on_track_list_changed,
- * vlc_player_cbs.on_program_list_changed, and
- * vlc_player_cbs.on_vout_list_changed callbacks
+ * vlc_player_cbs.on_program_list_changed callbacks
  */
 enum vlc_player_list_action
 {
     VLC_PLAYER_LIST_ADDED,
     VLC_PLAYER_LIST_REMOVED,
     VLC_PLAYER_LIST_UPDATED,
+};
+
+/**
+ * action of vlc_player_cbs.on_vout_changed callback
+ */
+enum vlc_player_vout_action
+{
+    VLC_PLAYER_VOUT_STARTED,
+    VLC_PLAYER_VOUT_STOPPED,
 };
 
 /**
@@ -324,17 +332,26 @@ enum vlc_player_subtitle_sync
 };
 
 /**
- * Vout filter type
- *
- * @warning Temporary enum, waiting for a refined vout filter API
- *
- * @see vlc_player_vout_SetFilter()
+ * Player lock type (normal or reentrant)
  */
-enum vlc_vout_filter_type
+enum vlc_player_lock_type
 {
-    VLC_VOUT_FILTER_VIDEO_FILTER,
-    VLC_VOUT_FILTER_SUB_SOURCE,
-    VLC_VOUT_FILTER_SUB_FILTER,
+    /**
+     * Normal lock
+     *
+     * If the player is already locked, subsequent calls to vlc_player_Lock()
+     * will deadlock.
+     */
+    VLC_PLAYER_LOCK_NORMAL,
+
+    /**
+     * Reentrant lock
+     *
+     * If the player is already locked, subsequent calls to vlc_player_Lock()
+     * will still succeed. To unlock the player, one call to
+     * vlc_player_Unlock() per vlc_player_Lock() is necessary.
+     */
+    VLC_PLAYER_LOCK_REENTRANT,
 };
 
 /** Player capability: can seek */
@@ -473,11 +490,12 @@ struct vlc_player_cbs
      * Always called when the media is opening. Can be called during playback.
      *
      * @param player locked player instance
-     * @param new_caps player capabilities
+     * @param old_caps old player capabilities
+     * @param new_caps new player capabilities
      * @param data opaque pointer set by vlc_player_AddListener()
      */
     void (*on_capabilities_changed)(vlc_player_t *player,
-        int new_caps, void *data);
+        int old_caps, int new_caps, void *data);
 
     /**
      * Called when the player position has changed
@@ -809,15 +827,19 @@ struct vlc_player_cbs
         input_item_t *media, input_item_node_t *new_subitems, void *data);
 
     /**
-     * Called when a new vout is added or removed
+     * Called when a vout is started or stopped
+     *
+     * @note In case, several media with only one video track are played
+     * successively, the same vout instance will be started and stopped several
+     * time.
      *
      * @param player locked player instance
-     * @param action added or removed
-     * @param vout new vout
+     * @param action started or stopped
+     * @param vout vout (can't be NULL)
      * @param data opaque pointer set by vlc_player_AddListener()
      */
-    void (*on_vout_list_changed)(vlc_player_t *player,
-        enum vlc_player_list_action action, vout_thread_t *vout, void *data);
+    void (*on_vout_changed)(vlc_player_t *player,
+        enum vlc_player_vout_action action, vout_thread_t *vout, void *data);
 
     /**
      * Called when the player is corked
@@ -922,6 +944,15 @@ struct vlc_player_aout_cbs
      */
     void (*on_mute_changed)(vlc_player_t *player,
         bool new_muted, void *data);
+
+    /**
+     * Called when the audio device has changed
+     *
+     * @param player unlocked player instance
+     * @param device the device name
+     */
+    void (*on_device_changed)(vlc_player_t *player, const char *device,
+                              void *data);
 };
 
 /**
@@ -1006,7 +1037,7 @@ vlc_player_title_list_GetAt(vlc_player_title_list *titles, size_t idx);
  * @return a pointer to a valid player instance or NULL in case of error
  */
 VLC_API vlc_player_t *
-vlc_player_New(vlc_object_t *parent,
+vlc_player_New(vlc_object_t *parent, enum vlc_player_lock_type lock_type,
                const struct vlc_player_media_provider *media_provider,
                void *media_provider_data);
 
@@ -1966,6 +1997,24 @@ VLC_API void
 vlc_player_SelectPrevProgram(vlc_player_t *player);
 
 /**
+ * Helper to get the current selected program
+ */
+static inline const struct vlc_player_program *
+vlc_player_GetSelectedProgram(vlc_player_t *player)
+{
+    size_t count = vlc_player_GetProgramCount(player);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct vlc_player_program *program =
+            vlc_player_GetProgramAt(player, i);
+        assert(program);
+        if (program->selected)
+            return program;
+    }
+    return NULL;
+}
+
+/**
  * Check if the media has a teletext menu
  *
  * @see vlc_player_cbs.on_teletext_menu_changed
@@ -2456,15 +2505,6 @@ VLC_API vlc_object_t *
 vlc_player_GetV4l2Object(vlc_player_t *player) VLC_DEPRECATED;
 
 /**
- * Set a video splitter to the main vout
- *
- * @param player locked instance
- * @param splitter a video splitter name or NULL
- */
-VLC_API void
-vlc_player_SetVideoSplitter(vlc_player_t *player, const char *splitter);
-
-/**
  * Get the audio output
  *
  * @warning The returned pointer must be released with aout_Release().
@@ -2611,7 +2651,11 @@ vlc_player_aout_EnableFilter(vlc_player_t *player, const char *name, bool add);
  * Get and hold the main video output
  *
  * @warning the returned vout_thread_t * must be released with vout_Release().
- * @see vlc_players_cbs.on_vout_list_changed
+ * @see vlc_players_cbs.on_vout_changed
+ *
+ * @note The player is guaranteed to always hold one valid vout. Only vout
+ * variables can be changed from this instance. The vout returned before
+ * playback is not necessarily the same one that will be used for playback.
  *
  * @param player player instance
  * @return a valid vout_thread_t * or NULL, cf. warning
@@ -2625,7 +2669,7 @@ vlc_player_vout_Hold(vlc_player_t *player);
  * @warning All vout_thread_t * element of the array must be released with
  * vout_Release(). The returned array must be freed.
  *
- * @see vlc_players_cbs.on_vout_list_changed
+ * @see vlc_players_cbs.on_vout_changed
  *
  * @param player player instance
  * @param count valid pointer to store the array count
@@ -2747,34 +2791,6 @@ vlc_player_vout_ToggleWallpaperMode(vlc_player_t *player)
     vlc_player_vout_SetWallpaperModeEnabled(player,
         !vlc_player_vout_IsWallpaperModeEnabled(player));
 }
-
-/**
- * Set a filter chain to all vouts and all future vouts
- *
- * @warning This is a temporary function, waiting for a refined vout filter
- * API.
- *
- * @param player instance
- * @param type filter type
- * @param value a valid chain of filter (separated with ',') or NULL
- */
-VLC_API void
-vlc_player_vout_SetFilter(vlc_player_t *player, enum vlc_vout_filter_type type,
-                          const char *value);
-
-/**
- * Get the filter chain value applied to all vouts
- *
- * @warning This is a temporary function, waiting for a refined vout filter
- * API.
- *
- * @param player instance
- * @param type filter type
- * @return an allocated string representing the filter chain, free it with
- * free(), can be NULL
- */
-VLC_API char *
-vlc_player_vout_GetFilter(vlc_player_t *player, enum vlc_vout_filter_type type);
 
 /**
  * Take a snapshot on all vouts

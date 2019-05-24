@@ -42,15 +42,16 @@
 #include <vlc_url.h>
 #include <vlc_variables.h>
 
-#import "coreinteraction/VLCHotkeysController.h"
-
 #import "library/VLCLibraryWindow.h"
 
 #import "main/CompatibilityFixes.h"
 #import "main/VLCMain+OldPrefs.h"
 #import "main/VLCApplication.h"
 
+#import "extensions/NSString+Helpers.h"
+
 #import "menus/VLCMainMenu.h"
+#import "menus/VLCStatusBarIcon.h"
 
 #import "os-integration/VLCClickerManager.h"
 
@@ -62,6 +63,7 @@
 #import "panels/VLCVideoEffectsWindowController.h"
 #import "panels/VLCTrackSynchronizationWindowController.h"
 
+#import "library/VLCLibraryController.h"
 #import "playlist/VLCPlaylistController.h"
 #import "playlist/VLCPlayerController.h"
 #import "playlist/VLCPlaylistModel.h"
@@ -76,10 +78,53 @@
 #import "windows/VLCOpenWindowController.h"
 #import "windows/VLCOpenInputMetadata.h"
 #import "windows/video/VLCVoutView.h"
+#import "windows/video/VLCVideoOutputProvider.h"
 
 #ifdef HAVE_SPARKLE
 #import <Sparkle/Sparkle.h>                 /* we're the update delegate */
 #endif
+
+NSString *VLCConfigurationChangedNotification = @"VLCConfigurationChangedNotification";
+
+#pragma mark -
+#pragma mark Private extension
+
+@interface VLCMain ()
+#ifdef HAVE_SPARKLE
+<SUUpdaterDelegate, NSApplicationDelegate>
+#else
+<NSApplicationDelegate>
+#endif
+{
+    intf_thread_t *p_intf;
+    BOOL launched;
+
+    BOOL b_active_videoplayback;
+
+    VLCMainMenu *_mainmenu;
+    VLCPrefs *_prefs;
+    VLCSimplePrefsController *_sprefs;
+    VLCOpenWindowController *_open;
+    VLCCoreDialogProvider *_coredialogs;
+    VLCBookmarksWindowController *_bookmarks;
+    VLCResumeDialogController *_resume_dialog;
+    VLCPlaybackContinuityController *_continuityController;
+    VLCLogWindowController *_messagePanelController;
+    VLCStatusBarIcon *_statusBarIcon;
+    VLCTrackSynchronizationWindowController *_trackSyncPanel;
+    VLCAudioEffectsWindowController *_audioEffectsPanel;
+    VLCVideoEffectsWindowController *_videoEffectsPanel;
+    VLCConvertAndSaveWindowController *_convertAndSaveWindow;
+    VLCInformationWindowController *_currentMediaInfoPanel;
+    VLCLibraryWindowController *_libraryWindowController;
+    VLCClickerManager *_clickerManager;
+
+    bool b_intf_terminating; /* Makes sure applicationWillTerminate will be called only once */
+}
++ (void)killInstance;
+- (void)applicationWillTerminate:(NSNotification *)notification;
+
+@end
 
 #pragma mark -
 #pragma mark VLC Interface Object Callbacks
@@ -124,9 +169,9 @@ void CloseIntf (vlc_object_t *p_this)
         msg_Dbg(p_this, "Closing macosx interface");
         [[VLCMain sharedInstance] applicationWillTerminate:nil];
         [VLCMain killInstance];
-
-        p_interface_thread = nil;
     }
+
+    p_interface_thread = nil;
 }
 
 #pragma mark -
@@ -173,43 +218,6 @@ static int BossCallback(vlc_object_t *p_this, const char *psz_var,
     }
 }
 
-#pragma mark -
-#pragma mark Private
-
-@interface VLCMain ()
-#ifdef HAVE_SPARKLE
-    <SUUpdaterDelegate>
-#endif
-{
-    intf_thread_t *p_intf;
-    BOOL launched;
-
-    BOOL b_active_videoplayback;
-
-    VLCMainMenu *_mainmenu;
-    VLCPrefs *_prefs;
-    VLCSimplePrefsController *_sprefs;
-    VLCOpenWindowController *_open;
-    VLCCoreDialogProvider *_coredialogs;
-    VLCBookmarksWindowController *_bookmarks;
-    VLCResumeDialogController *_resume_dialog;
-    VLCPlaybackContinuityController *_continuityController;
-    VLCLogWindowController *_messagePanelController;
-    VLCStatusBarIcon *_statusBarIcon;
-    VLCTrackSynchronizationWindowController *_trackSyncPanel;
-    VLCAudioEffectsWindowController *_audioEffectsPanel;
-    VLCVideoEffectsWindowController *_videoEffectsPanel;
-    VLCConvertAndSaveWindowController *_convertAndSaveWindow;
-    VLCExtensionsManager *_extensionsManager;
-    VLCInformationWindowController *_currentMediaInfoPanel;
-    VLCLibraryWindowController *_libraryWindowController;
-    VLCClickerManager *_clickerManager;
-
-    bool b_intf_terminating; /* Makes sure applicationWillTerminate will be called only once */
-}
-
-@end
-
 /*****************************************************************************
  * VLCMain implementation
  *****************************************************************************/
@@ -243,9 +251,8 @@ static VLCMain *sharedInstance = nil;
 
         [VLCApplication sharedApplication].delegate = self;
 
-        _hotkeysController = [[VLCHotkeysController alloc] init];
-
         _playlistController = [[VLCPlaylistController alloc] initWithPlaylist:vlc_intf_GetMainPlaylist(p_intf)];
+        _libraryController = [[VLCLibraryController alloc] init];
         _continuityController = [[VLCPlaybackContinuityController alloc] init];
 
         // first initalize extensions dialog provider, then core dialog
@@ -272,8 +279,6 @@ static VLCMain *sharedInstance = nil;
         if ([NSApp currentSystemPresentationOptions] & NSApplicationPresentationFullScreen)
             [_playlistController.playerController setFullscreen:YES];
 
-        _nativeFullscreenMode = var_InheritBool(p_intf, "macosx-nativefullscreenmode");
-
         if (var_InheritInteger(p_intf, "macosx-icon-change")) {
             /* After day 354 of the year, the usual VLC cone is replaced by another cone
              * wearing a Father Xmas hat.
@@ -291,14 +296,6 @@ static VLCMain *sharedInstance = nil;
     }
 
     return self;
-}
-
-- (void)dealloc
-{
-    msg_Dbg(getIntf(), "Deinitializing VLCMain object");
-
-    /* have the playlist controller explicitly unsubscribe from events prior to its deallocation */
-    [_playlistController deinitialize];
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification
@@ -463,11 +460,6 @@ static VLCMain *sharedInstance = nil;
     return _mainmenu;
 }
 
-- (VLCStatusBarIcon *)statusBarIcon
-{
-    return _statusBarIcon;
-}
-
 - (VLCLibraryWindowController *)libraryWindowController
 {
     return _libraryWindowController;
@@ -476,11 +468,6 @@ static VLCMain *sharedInstance = nil;
 - (VLCLibraryWindow *)libraryWindow
 {
     return (VLCLibraryWindow *)_libraryWindowController.window;
-}
-
-- (VLCExtensionsManager *)extensionsManager
-{
-    return _extensionsManager;
 }
 
 - (VLCLogWindowController *)debugMsgPanel

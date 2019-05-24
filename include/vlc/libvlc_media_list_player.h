@@ -153,12 +153,12 @@ void libvlc_media_list_player_set_pause(libvlc_media_list_player_t * p_mlp,
  * Is media list playing?
  *
  * \param p_mlp media list player instance
- * \return true for playing and false for not playing
  *
- * \libvlc_return_bool
+ * \retval true playing
+ * \retval false not playing
  */
-LIBVLC_API int
-    libvlc_media_list_player_is_playing( libvlc_media_list_player_t * p_mlp );
+LIBVLC_API bool
+libvlc_media_list_player_is_playing(libvlc_media_list_player_t * p_mlp);
 
 /**
  * Get current libvlc_state of media list player
@@ -197,7 +197,7 @@ int libvlc_media_list_player_play_item(libvlc_media_list_player_t * p_mlp,
  * \param p_mlp media list player instance
  */
 LIBVLC_API void
-    libvlc_media_list_player_stop( libvlc_media_list_player_t * p_mlp);
+    libvlc_media_list_player_stop_async( libvlc_media_list_player_t * p_mlp);
 
 /**
  * Play next item from media list

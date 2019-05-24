@@ -22,19 +22,29 @@
 # include "config.h"
 #endif
 
+#include <vlc_common.h>
+#include <vlc_es.h>
+#include <vlc_picture.h>
+#include <vlc_interrupt.h>
+#include <vlc_decklink.h>
+
+#include "DBMHelper.hpp"
 #include "DBMSDIOutput.hpp"
 #include "SDIStream.hpp"
 #include "SDIAudioMultiplex.hpp"
+#include "SDIGenerator.hpp"
 #include "Ancillary.hpp"
 #include "V210.hpp"
 
 #include <DeckLinkAPIDispatch.cpp>
+#include <DeckLinkAPIVersion.h>
+#if BLACKMAGIC_DECKLINK_API_VERSION < 0x0b010000
+ #define IID_IDeckLinkProfileAttributes IID_IDeckLinkAttributes
+ #define IDeckLinkProfileAttributes IDeckLinkAttributes
+#endif
+
 #include "sdiout.hpp"
 
-#include <vlc_es.h>
-#include <vlc_picture.h>
-#include <vlc_interrupt.h>
-#include <vlc_image.h>
 #include <arpa/inet.h>
 
 using namespace sdi_sout;
@@ -44,15 +54,14 @@ DBMSDIOutput::DBMSDIOutput(sout_stream_t *p_stream) :
 {
     p_card = NULL;
     p_output = NULL;
-    offset = 0;
+    clock.system_reference = VLC_TICK_INVALID;
+    clock.offset = 0;
     lasttimestamp = 0;
     b_running = false;
 }
 
 DBMSDIOutput::~DBMSDIOutput()
 {
-    if(video.pic_nosignal)
-        picture_Release(video.pic_nosignal);
     es_format_Clean(&video.configuredfmt);
     if(p_output)
     {
@@ -73,8 +82,6 @@ AbstractStream *DBMSDIOutput::Add(const es_format_t *fmt)
     {
         msg_Dbg(p_stream, "accepted %s %4.4s",
                           s->getID().toString().c_str(), (const char *) &fmt->i_codec);
-        if( videoStream && (!audioStreams.empty() || audio.i_channels == 0) )
-            Start();
     }
     else
     {
@@ -85,125 +92,20 @@ AbstractStream *DBMSDIOutput::Add(const es_format_t *fmt)
     return s;
 }
 
-IDeckLinkDisplayMode * DBMSDIOutput::MatchDisplayMode(const video_format_t *fmt, BMDDisplayMode forcedmode)
+int DBMSDIOutput::Send(AbstractStream *s, block_t *b)
 {
-    HRESULT result;
-    IDeckLinkDisplayMode *p_selected = NULL;
-    IDeckLinkDisplayModeIterator *p_iterator = NULL;
-
-    for(int i=0; i<4 && p_selected==NULL; i++)
+    if(!b_running && b->i_dts != VLC_TICK_INVALID)
     {
-        int i_width = (i % 2 == 0) ? fmt->i_width : fmt->i_visible_width;
-        int i_height = (i % 2 == 0) ? fmt->i_height : fmt->i_visible_height;
-        int i_div = (i > 2) ? 4 : 0;
-
-        result = p_output->GetDisplayModeIterator(&p_iterator);
-        if(result == S_OK)
-        {
-            IDeckLinkDisplayMode *p_mode = NULL;
-            while(p_iterator->Next(&p_mode) == S_OK)
-            {
-                BMDDisplayMode mode_id = p_mode->GetDisplayMode();
-                BMDTimeValue frameduration;
-                BMDTimeScale timescale;
-                const char *psz_mode_name;
-                decklink_str_t tmp_name;
-
-                if(p_mode->GetFrameRate(&frameduration, &timescale) == S_OK &&
-                        p_mode->GetName(&tmp_name) == S_OK)
-                {
-                    BMDDisplayMode modenl = htonl(mode_id);
-                    psz_mode_name = DECKLINK_STRDUP(tmp_name);
-                    DECKLINK_FREE(tmp_name);
-
-                    if(i==0)
-                    {
-                        BMDFieldDominance field = htonl(p_mode->GetFieldDominance());
-                        msg_Dbg(p_stream, "Found mode '%4.4s': %s (%ldx%ld, %4.4s, %.3f fps, scale %ld dur %ld)",
-                                (const char*)&modenl, psz_mode_name,
-                                p_mode->GetWidth(), p_mode->GetHeight(),
-                                (const char *)&field,
-                                double(timescale) / frameduration,
-                                timescale, frameduration);
-                    }
-                }
-                else
-                {
-                    p_mode->Release();
-                    continue;
-                }
-
-                if(forcedmode != bmdDisplayModeNotSupported && unlikely(!p_selected))
-                {
-                    BMDDisplayMode modenl = htonl(forcedmode);
-                    msg_Dbg(p_stream, "Forced mode '%4.4s'", (char *)&modenl);
-                    if(forcedmode == mode_id)
-                        p_selected = p_mode;
-                    else
-                        p_mode->Release();
-                    continue;
-                }
-
-                if(p_selected == NULL && forcedmode == bmdDisplayModeNotSupported)
-                {
-                    if(i_width >> i_div == p_mode->GetWidth() >> i_div &&
-                       i_height >> i_div == p_mode->GetHeight() >> i_div)
-                    {
-                        unsigned int num_deck, den_deck;
-                        unsigned int num_stream, den_stream;
-                        vlc_ureduce(&num_deck, &den_deck, timescale, frameduration, 0);
-                        vlc_ureduce(&num_stream, &den_stream,
-                                    fmt->i_frame_rate, fmt->i_frame_rate_base, 0);
-
-                        if (num_deck == num_stream && den_deck == den_stream)
-                        {
-                            msg_Info(p_stream, "Matches incoming stream");
-                            p_selected = p_mode;
-                            continue;
-                        }
-                    }
-                }
-
-                p_mode->Release();
-            }
-            p_iterator->Release();
-        }
+        if( videoStream && (!audioStreams.empty() || audio.i_channels == 0) )
+            Start(b->i_dts);
     }
-    return p_selected;
-}
-
-
-const char * DBMSDIOutput::ErrorToString(long i_code)
-{
-    static struct
-    {
-        long i_return_code;
-        const char * const psz_string;
-    } const errors_to_string[] = {
-        { E_UNEXPECTED,  "Unexpected error" },
-        { E_NOTIMPL,     "Not implemented" },
-        { E_OUTOFMEMORY, "Out of memory" },
-        { E_INVALIDARG,  "Invalid argument" },
-        { E_NOINTERFACE, "No interface" },
-        { E_POINTER,     "Invalid pointer" },
-        { E_HANDLE,      "Invalid handle" },
-        { E_ABORT,       "Aborted" },
-        { E_FAIL,        "Failed" },
-        { E_ACCESSDENIED,"Access denied" }
-    };
-
-    for(size_t i=0; i<ARRAY_SIZE(errors_to_string); i++)
-    {
-        if(errors_to_string[i].i_return_code == i_code)
-            return errors_to_string[i].psz_string;
-    }
-    return NULL;
+    return SDIOutput::Send(s, b);
 }
 
 #define CHECK(message) do { \
     if (result != S_OK) \
     { \
-    const char *psz_err = ErrorToString(result); \
+    const char *psz_err = Decklink::Helper::ErrorToString(result); \
     if(psz_err)\
     msg_Err(p_stream, message ": %s", psz_err); \
     else \
@@ -279,7 +181,7 @@ error:
 int DBMSDIOutput::ConfigureAudio(const audio_format_t *)
 {
     HRESULT result;
-    IDeckLinkAttributes *p_attributes = NULL;
+    IDeckLinkProfileAttributes *p_attributes = NULL;
 
     if(FAKE_DRIVER)
         return VLC_SUCCESS;
@@ -294,7 +196,7 @@ int DBMSDIOutput::ConfigureAudio(const audio_format_t *)
     {
         uint8_t maxchannels = audioMultiplex->config.getMultiplexedFramesCount() * 2;
 
-        result = p_card->QueryInterface(IID_IDeckLinkAttributes, (void**)&p_attributes);
+        result = p_card->QueryInterface(IID_IDeckLinkProfileAttributes, (void**)&p_attributes);
         CHECK("Could not get IDeckLinkAttributes");
 
         int64_t i64;
@@ -352,9 +254,9 @@ static BMDVideoConnection getVConn(const char *psz)
 int DBMSDIOutput::ConfigureVideo(const video_format_t *vfmt)
 {
     HRESULT result;
-    BMDDisplayMode wanted_mode_id = bmdDisplayModeNotSupported;
+    BMDDisplayMode wanted_mode_id = bmdModeUnknown;
     IDeckLinkConfiguration *p_config = NULL;
-    IDeckLinkAttributes *p_attributes = NULL;
+    IDeckLinkProfileAttributes *p_attributes = NULL;
     IDeckLinkDisplayMode *p_display_mode = NULL;
     char *psz_string = NULL;
     video_format_t *fmt = &video.configuredfmt.video;
@@ -399,7 +301,7 @@ int DBMSDIOutput::ConfigureVideo(const video_format_t *vfmt)
     }
 
     /* Read attributes */
-    result = p_card->QueryInterface(IID_IDeckLinkAttributes, (void**)&p_attributes);
+    result = p_card->QueryInterface(IID_IDeckLinkProfileAttributes, (void**)&p_attributes);
     CHECK("Could not get IDeckLinkAttributes");
 
     int64_t vconn;
@@ -418,7 +320,8 @@ int DBMSDIOutput::ConfigureVideo(const video_format_t *vfmt)
     result = p_config->SetInt(bmdDeckLinkConfigVideoOutputConnection, vconn);
     CHECK("Could not set video output connection");
 
-    p_display_mode = MatchDisplayMode(vfmt, wanted_mode_id);
+    p_display_mode = Decklink::Helper::MatchDisplayMode(VLC_OBJECT(p_stream),
+                                                        p_output, vfmt, wanted_mode_id);
     if(p_display_mode == NULL)
     {
         msg_Err(p_stream, "Could not negociate a compatible display mode");
@@ -430,22 +333,33 @@ int DBMSDIOutput::ConfigureVideo(const video_format_t *vfmt)
         BMDDisplayMode modenl = htonl(mode_id);
         msg_Dbg(p_stream, "Selected mode '%4.4s'", (char *) &modenl);
 
+        BMDPixelFormat pixelFormat = video.tenbits ? bmdFormat10BitYUV : bmdFormat8BitYUV;
         BMDVideoOutputFlags flags = bmdVideoOutputVANC;
         if (mode_id == bmdModeNTSC ||
-                mode_id == bmdModeNTSC2398 ||
-                mode_id == bmdModePAL)
+            mode_id == bmdModeNTSC2398 ||
+            mode_id == bmdModePAL)
         {
             flags = bmdVideoOutputVITC;
         }
-
-        BMDDisplayModeSupport support;
-        IDeckLinkDisplayMode *resultMode;
-
+        bool supported;
+#if BLACKMAGIC_DECKLINK_API_VERSION < 0x0b010000
+        BMDDisplayModeSupport support = bmdDisplayModeNotSupported;
         result = p_output->DoesSupportVideoMode(mode_id,
-                                                video.tenbits ? bmdFormat10BitYUV : bmdFormat8BitYUV,
-                                                flags, &support, &resultMode);
+                                                pixelFormat,
+                                                flags,
+                                                &support,
+                                                NULL);
+        supported = (support != bmdDisplayModeNotSupported);
+#else
+        result = p_output->DoesSupportVideoMode(vconn,
+                                                mode_id,
+                                                pixelFormat,
+                                                bmdSupportedVideoModeDefault,
+                                                NULL,
+                                                &supported);
+#endif
         CHECK("Does not support video mode");
-        if (support == bmdDisplayModeNotSupported)
+        if (!supported)
         {
             msg_Err(p_stream, "Video mode not supported");
             goto error;
@@ -479,7 +393,7 @@ int DBMSDIOutput::ConfigureVideo(const video_format_t *vfmt)
         char *psz_file = var_InheritString(p_stream, CFG_PREFIX "nosignal-image");
         if(psz_file)
         {
-            video.pic_nosignal = CreateNoSignalPicture(psz_file, fmt);
+            video.pic_nosignal = sdi::Generator::Picture(VLC_OBJECT(p_stream), psz_file, fmt);
             if (!video.pic_nosignal)
                 msg_Err(p_stream, "Could not create no signal picture");
             free(psz_file);
@@ -502,7 +416,7 @@ error:
     return VLC_EGENERIC;
 }
 
-int DBMSDIOutput::Start()
+int DBMSDIOutput::Start(vlc_tick_t startTime)
 {
     HRESULT result;
     if(FAKE_DRIVER && !b_running)
@@ -512,8 +426,8 @@ int DBMSDIOutput::Start()
     }
     if(b_running)
         return VLC_EGENERIC;
-    result = p_output->StartScheduledPlayback(
-                     samples_from_vlc_tick(vlc_tick_now(), timescale), timescale, 1.0);
+
+    result = p_output->StartScheduledPlayback(startTime, CLOCK_FREQ, 1.0);
     CHECK("Could not start playback");
     b_running = true;
     return VLC_SUCCESS;
@@ -575,12 +489,14 @@ int DBMSDIOutput::ProcessAudio(block_t *p_block)
         return VLC_EGENERIC;
     }
 
-    p_block->i_pts -= offset;
+    p_block->i_pts -= clock.offset;
 
     uint32_t sampleFrameCount = p_block->i_nb_samples;
     uint32_t written;
     HRESULT result = p_output->ScheduleAudioSamples(
-            p_block->p_buffer, p_block->i_nb_samples, p_block->i_pts, CLOCK_FREQ, &written);
+                p_block->p_buffer, p_block->i_nb_samples,
+                p_block->i_pts + CLOCK_FREQ,
+                CLOCK_FREQ, &written);
 
     if (result != S_OK)
         msg_Err(p_stream, "Failed to schedule audio sample: 0x%X", result);
@@ -598,22 +514,26 @@ int DBMSDIOutput::ProcessAudio(block_t *p_block)
 
 int DBMSDIOutput::ProcessVideo(picture_t *picture, block_t *p_cc)
 {
-    mtime_t now = vlc_tick_now();
-
     if (!picture)
         return VLC_EGENERIC;
 
-    if(picture->date - now >  5000)
-        vlc_msleep_i11e(picture->date - now);
+    checkClockDrift();
 
-    if (video.pic_nosignal &&
-        now - picture->date > vlc_tick_from_sec(video.nosignal_delay))
+    if(video.pic_nosignal)
     {
-        msg_Dbg(p_stream, "no signal");
-
-        picture_Hold(video.pic_nosignal);
-        video.pic_nosignal->date = now;
-        doProcessVideo(picture, NULL);
+        BMDTimeValue streamTime;
+        double playbackSpeed;
+        if(S_OK == p_output->GetScheduledStreamTime(CLOCK_FREQ, &streamTime, &playbackSpeed))
+        {
+            if(picture->date + CLOCK_FREQ - streamTime >
+                    VLC_TICK_FROM_SEC(video.nosignal_delay))
+            {
+                msg_Info(p_stream, "no signal");
+                picture_Hold(video.pic_nosignal);
+                video.pic_nosignal->date = streamTime + VLC_TICK_FROM_MS(30);
+                doProcessVideo(video.pic_nosignal, NULL);
+            }
+        }
     }
 
     return doProcessVideo(picture, p_cc);
@@ -623,7 +543,6 @@ int DBMSDIOutput::doProcessVideo(picture_t *picture, block_t *p_cc)
 {
     HRESULT result;
     int w, h, stride, length, ret = VLC_EGENERIC;
-    mtime_t now;
     IDeckLinkMutableVideoFrame *pDLVideoFrame = NULL;
     w = video.configuredfmt.video.i_visible_width;
     h = video.configuredfmt.video.i_visible_height;
@@ -634,7 +553,7 @@ int DBMSDIOutput::doProcessVideo(picture_t *picture, block_t *p_cc)
     result = p_output->CreateVideoFrame(w, h, w*3,
                                         video.tenbits ? bmdFormat10BitYUV : bmdFormat8BitYUV,
                                         bmdFrameFlagDefault, &pDLVideoFrame);
-    if (result != S_OK) {
+    if(result != S_OK) {
         msg_Err(p_stream, "Failed to create video frame: 0x%X", result);
         goto error;
     }
@@ -693,28 +612,16 @@ int DBMSDIOutput::doProcessVideo(picture_t *picture, block_t *p_cc)
 
     // compute frame duration in CLOCK_FREQ units
     length = (frameduration * CLOCK_FREQ) / timescale;
-
-    picture->date -= offset;
+    picture->date -= clock.offset;
     result = p_output->ScheduleVideoFrame(pDLVideoFrame,
-                                          picture->date, length, CLOCK_FREQ);
+                                          picture->date + CLOCK_FREQ,
+                                          length, CLOCK_FREQ);
     if (result != S_OK) {
         msg_Err(p_stream, "Dropped Video frame %" PRId64 ": 0x%x",
                 picture->date, result);
         goto error;
     }
     lasttimestamp = __MAX(picture->date, lasttimestamp);
-
-    now = vlc_tick_now() - offset;
-
-    BMDTimeValue decklink_now;
-    double speed;
-    p_output->GetScheduledStreamTime (CLOCK_FREQ, &decklink_now, &speed);
-
-    if ((now - decklink_now) > 400000) {
-        /* XXX: workaround card clock drift */
-        offset += 50000;
-        msg_Err(p_stream, "Delaying: offset now %" PRId64, offset);
-    }
 
 end:
     ret = VLC_SUCCESS;
@@ -729,34 +636,29 @@ error:
     return ret;
 }
 
-picture_t * DBMSDIOutput::CreateNoSignalPicture(const char *psz_file, const video_format_t *fmt)
+void DBMSDIOutput::checkClockDrift()
 {
-    picture_t *p_pic = NULL;
-    image_handler_t *img = image_HandlerCreate(p_stream);
-    if (img)
+    BMDTimeValue hardwareTime, timeInFrame, ticksPerFrame;
+    if(S_OK == p_output->GetHardwareReferenceClock(CLOCK_FREQ,
+                                                   &hardwareTime,
+                                                   &timeInFrame,
+                                                   &ticksPerFrame))
     {
-        video_format_t in;
-        video_format_Init(&in, 0);
-        video_format_Setup(&in, 0,
-                           fmt->i_width, fmt->i_height,
-                           fmt->i_width, fmt->i_height, 1, 1);
-
-        picture_t *png = image_ReadUrl(img, psz_file, &in);
-        if (png)
+        if(clock.system_reference == VLC_TICK_INVALID)
         {
-            video_format_t dummy;
-            video_format_Copy(&dummy, fmt);
-            p_pic = image_Convert(img, png, &in, &dummy);
-            if(!video_format_IsSimilar(&dummy, fmt))
-            {
-                picture_Release(p_pic);
-                p_pic = NULL;
-            }
-            picture_Release(png);
-            video_format_Clean(&dummy);
+            clock.system_reference = vlc_tick_now();
+            clock.hardware_reference = hardwareTime;
         }
-        image_HandlerDelete(img);
-        video_format_Clean(&in);
+        else
+        {
+            vlc_tick_t elapsed_system = vlc_tick_now() - clock.system_reference;
+            BMDTimeValue elapsed_hardware = hardwareTime - clock.hardware_reference;
+            if(std::abs(elapsed_system - elapsed_hardware) >
+                    std::abs(clock.offset) + VLC_TICK_FROM_MS(15))
+            {
+                clock.offset = elapsed_system - elapsed_hardware;
+                msg_Info(p_stream, "offset now %" PRId64 " ms", clock.offset / 1000);
+            }
+        }
     }
-    return p_pic;
 }

@@ -26,7 +26,10 @@
 #import "coreinteraction/VLCVideoFilterHelper.h"
 
 #import "extensions/NSScreen+VLCAdditions.h"
+#import "extensions/NSString+Helpers.h"
+
 #import "library/VLCLibraryWindow.h"
+#import "library/VLCLibraryFolderManagementWindow.h"
 
 #import "menus/renderers/VLCRendererMenuController.h"
 
@@ -48,10 +51,11 @@
 #import "windows/VLCHelpWindowController.h"
 #import "windows/mainwindow/VLCMainWindowControlsBar.h"
 #import "windows/extensions/VLCExtensionsManager.h"
-#import "windows/video/VLCVoutView.h"
 #import "windows/convertandsave/VLCConvertAndSaveWindowController.h"
 #import "windows/logging/VLCLogWindowController.h"
 #import "windows/addons/VLCAddonsWindowController.h"
+#import "windows/video/VLCVoutView.h"
+#import "windows/video/VLCVideoOutputProvider.h"
 
 #import <vlc_interface.h>
 
@@ -91,6 +95,7 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     VLCRendererMenuController *_rendererMenuController;
     VLCPlaylistController *_playlistController;
     VLCPlayerController *_playerController;
+    VLCLibraryFolderManagementWindowController *_libraryFoldersController;
     NSTimer *_cancelRendererDiscoveryTimer;
 
     NSMenu *_playlistTableColumnsContextMenu;
@@ -366,7 +371,7 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     [_togglePlaymodeButtons setState: var_InheritBool(getIntf(), "macosx-show-playmode-buttons")];
     [_toggleEffectsButton setTitle: _NS("Show Audio Effects Button")];
     [_toggleEffectsButton setState: var_InheritBool(getIntf(), "macosx-show-effects-button")];
-    [_toggleSidebar setTitle: _NS("Show Sidebar")];
+    [_showLibraryFolders setTitle: _NS("Show Library Folders...")];
     [_playlistTableColumns setTitle: _NS("Playlist Table Columns")];
 
     [_controlsMenu setTitle: _NS("Playback")];
@@ -760,14 +765,12 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
     [_togglePlaymodeButtons setState: b_value];
 }
 
-- (IBAction)toggleSidebar:(id)sender
+- (IBAction)showLibraryFolders:(id)sender
 {
-    // FIXME: remove this method as it is no longer needed
-}
-
-- (void)updateSidebarMenuItem:(BOOL)show;
-{
-    [_toggleSidebar setState:show];
+    if (!_libraryFoldersController) {
+        _libraryFoldersController = [[VLCLibraryFolderManagementWindowController alloc] initWithWindowNibName:@"VLCLibraryFolderManagementWindow"];
+    }
+    [_libraryFoldersController showWindow:sender];
 }
 
 #pragma mark - Playback
@@ -1430,28 +1433,28 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
 
 - (IBAction)openDocumentation:(id)sender
 {
-    NSURL *url = [NSURL URLWithString: @"http://www.videolan.org/doc/"];
+    NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/doc/"];
 
     [[NSWorkspace sharedWorkspace] openURL: url];
 }
 
 - (IBAction)openWebsite:(id)sender
 {
-    NSURL *url = [NSURL URLWithString: @"http://www.videolan.org/"];
+    NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/"];
 
     [[NSWorkspace sharedWorkspace] openURL: url];
 }
 
 - (IBAction)openForum:(id)sender
 {
-    NSURL *url = [NSURL URLWithString: @"http://forum.videolan.org/"];
+    NSURL *url = [NSURL URLWithString: @"https://forum.videolan.org/"];
 
     [[NSWorkspace sharedWorkspace] openURL: url];
 }
 
 - (IBAction)openDonate:(id)sender
 {
-    NSURL *url = [NSURL URLWithString: @"http://www.videolan.org/contribute.html#paypal"];
+    NSURL *url = [NSURL URLWithString: @"https://www.videolan.org/contribute.html#paypal"];
 
     [[NSWorkspace sharedWorkspace] openURL: url];
 }
@@ -1902,8 +1905,9 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
         _variableName = strdup(name);
         _variableType = type;
         _variableValue = value;
-        if ((type & VLC_VAR_TYPE) == VLC_VAR_STRING)
+        if ((type & VLC_VAR_TYPE) == VLC_VAR_STRING) {
             _variableValue.psz_string = strdup(value.psz_string);
+        }
     }
 
     return(self);
@@ -1911,10 +1915,23 @@ typedef NS_ENUM(NSInteger, VLCObjectType) {
 
 - (void)dealloc
 {
-    if (_vlcObject && _objectType != VLCObjectTypeInterface)
-        vlc_object_release(_vlcObject);
-    if ((_variableType & VLC_VAR_TYPE) == VLC_VAR_STRING)
+    if (_vlcObject) {
+        switch (_objectType) {
+            case VLCObjectTypeAout:
+                aout_Release((audio_output_t *)_vlcObject);
+                break;
+            case VLCObjectTypeVout:
+                vout_Release((vout_thread_t *)_vlcObject);
+                break;
+
+            default:
+                // the interface will be released by the core shortly
+                break;
+        }
+    }
+    if ((_variableType & VLC_VAR_TYPE) == VLC_VAR_STRING) {
         free(_variableValue.psz_string);
+    }
     free(_variableName);
 }
 

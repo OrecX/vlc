@@ -266,6 +266,7 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
     const char *psz_adjust_range      = DEFAULT_NOOP;
     const char *psz_move_planes[2]    = {DEFAULT_NOOP, DEFAULT_NOOP};
     char *psz_range = NULL;
+    char *psz_transform = NULL;
 
     D3D11_SAMPLER_DESC sampDesc;
     memset(&sampDesc, 0, sizeof(sampDesc));
@@ -423,7 +424,7 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
 
     video_transfer_func_t src_transfer;
 
-    if (transfer != display->colorspace->transfer)
+    if (transfer != display->transfer)
     {
         /* we need to go in linear mode */
         switch (transfer)
@@ -439,12 +440,16 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
                 src_transfer = TRANSFER_FUNC_LINEAR;
                 break;
             case TRANSFER_FUNC_HLG:
-                /* HLG to Linear */
-                psz_src_transform =
-                       "rgb.r = inverse_HLG(rgb.r);\n"
-                       "rgb.g = inverse_HLG(rgb.g);\n"
-                       "rgb.b = inverse_HLG(rgb.b);\n"
-                       "return rgb / 20.0";
+                asprintf(&psz_transform, "const float alpha_gain = 10000.0;\n"
+                                          "rgb.r = inverse_HLG(rgb.r);\n"
+                                          "rgb.g = inverse_HLG(rgb.g);\n"
+                                          "rgb.b = inverse_HLG(rgb.b);\n"
+                                          "float3 ootf_2020 = float3(0.2627, 0.6780, 0.0593);\n"
+                                          "float ootf_ys = alpha_gain * dot(ootf_2020, rgb);\n"
+                                          "rgb *= pow(ootf_ys, 0.200);\n"
+                                          "return rgb / %lld;",
+                         display->transfer == TRANSFER_FUNC_SMPTE_ST2084 ? 1000 : 250);
+                psz_src_transform = psz_transform;
                 src_transfer = TRANSFER_FUNC_LINEAR;
                 break;
             case TRANSFER_FUNC_BT709:
@@ -466,7 +471,7 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
                 break;
         }
 
-        switch (display->colorspace->transfer)
+        switch (display->transfer)
         {
             case TRANSFER_FUNC_SRGB:
                 if (src_transfer == TRANSFER_FUNC_LINEAR)
@@ -502,12 +507,12 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
                     msg_Warn(o, "don't know how to transfer from %d to SMPTE ST 2084", src_transfer);
                 break;
             default:
-                msg_Warn(o, "don't know how to transfer from %d to %d", src_transfer, display->colorspace->transfer);
+                msg_Warn(o, "don't know how to transfer from %d to %d", src_transfer, display->transfer);
                 break;
         }
     }
 
-    if (display->colorspace->primaries != primaries)
+    if (display->primaries != primaries)
     {
         switch (primaries)
         {
@@ -526,7 +531,7 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
     }
 
     int range_adjust = 0;
-    if (display->colorspace->b_full_range) {
+    if (display->b_full_range) {
         if (!src_full_range)
             range_adjust = 1; /* raise the source to full range */
     } else {
@@ -612,6 +617,7 @@ HRESULT D3D11_CompilePixelShader(vlc_object_t *o, d3d11_handle_t *hd3d, bool leg
                                  psz_display_transform, psz_tone_mapping,
                                  psz_adjust_range, psz_move_planes[1], &quad->d3dpixelShader[1]);
     free(psz_range);
+    free(psz_transform);
 
     return hr;
 }
@@ -689,7 +695,7 @@ float GetFormatLuminance(vlc_object_t *o, const video_format_t *fmt)
 }
 
 HRESULT D3D11_CreateRenderTargets( d3d11_device_t *d3d_dev, ID3D11Resource *texture,
-                                   const d3d_format_t *cfg, ID3D11RenderTargetView *output[D3D11_MAX_SHADER_VIEW] )
+                                   const d3d_format_t *cfg, ID3D11RenderTargetView *output[D3D11_MAX_RENDER_TARGET] )
 {
     D3D11_RENDER_TARGET_VIEW_DESC renderTargetViewDesc;
     renderTargetViewDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
@@ -712,13 +718,15 @@ HRESULT D3D11_CreateRenderTargets( d3d11_device_t *d3d_dev, ID3D11Resource *text
 }
 
 void D3D11_ClearRenderTargets(d3d11_device_t *d3d_dev, const d3d_format_t *cfg,
-                              ID3D11RenderTargetView *targets[D3D11_MAX_SHADER_VIEW])
+                              ID3D11RenderTargetView *targets[D3D11_MAX_RENDER_TARGET])
 {
     static const FLOAT blackY[1] = {0.0f};
     static const FLOAT blackUV[2] = {0.5f, 0.5f};
     static const FLOAT blackRGBA[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     static const FLOAT blackYUY2[4] = {0.0f, 0.5f, 0.0f, 0.5f};
     static const FLOAT blackVUYA[4] = {0.5f, 0.5f, 0.0f, 1.0f};
+
+    static_assert(D3D11_MAX_RENDER_TARGET >= 2, "we need at least 2 RenderTargetView for NV12/P010");
 
     switch (cfg->formatTexture)
     {

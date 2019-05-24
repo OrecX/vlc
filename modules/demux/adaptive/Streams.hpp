@@ -66,10 +66,10 @@ namespace adaptive
         vlc_tick_t getFirstDTS() const;
         int esCount() const;
         bool isSelected() const;
-        bool canActivate() const;
         virtual bool reactivate(vlc_tick_t);
         void setDisabled(bool);
         bool isDisabled() const;
+        bool isValid() const;
         typedef enum {
             status_eof = 0, /* prioritized */
             status_discontinuity,
@@ -127,16 +127,18 @@ namespace adaptive
         std::string language;
         std::string description;
 
-        CommandsQueue *commandsqueue;
         AbstractDemuxer *demuxer;
         AbstractSourceStream *demuxersource;
+        FakeESOut::LockedFakeEsOut fakeEsOut();
+        FakeESOut::LockedFakeEsOut fakeEsOut() const;
         FakeESOut *fakeesout; /* to intercept/proxy what is sent from demuxstream */
-        vlc_mutex_t lock; /* lock for everything accessed by dequeuing */
+        mutable vlc_mutex_t lock; /* lock for everything accessed by dequeuing */
 
     private:
+        void declaredCodecs();
         buffering_status doBufferize(vlc_tick_t, vlc_tick_t, vlc_tick_t);
         buffering_status last_buffer_status;
-        bool dead;
+        bool valid;
         bool disabled;
         unsigned notfound_sequence;
     };

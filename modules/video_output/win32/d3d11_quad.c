@@ -44,7 +44,7 @@
 
 void D3D11_RenderQuad(d3d11_device_t *d3d_dev, d3d_quad_t *quad, d3d_vshader_t *vsshader,
                       ID3D11ShaderResourceView *resourceView[D3D11_MAX_SHADER_VIEW],
-                      ID3D11RenderTargetView *d3drenderTargetView[D3D11_MAX_SHADER_VIEW])
+                      d3d11_select_plane_t selectPlane, void *selectOpaque)
 {
     UINT offset = 0;
 
@@ -73,13 +73,12 @@ void D3D11_RenderQuad(d3d11_device_t *d3d_dev, d3d_quad_t *quad, d3d_vshader_t *
         if (!quad->d3dpixelShader[i])
             break;
 
+        if (unlikely(!selectPlane(selectOpaque, i)))
+            continue;
+
         ID3D11DeviceContext_PSSetShader(d3d_dev->d3dcontext, quad->d3dpixelShader[i], NULL, 0);
 
         ID3D11DeviceContext_RSSetViewports(d3d_dev->d3dcontext, 1, &quad->cropViewport[i]);
-
-        if (d3drenderTargetView[0])
-            /* TODO: handle outside selection of the render sub-target */
-            ID3D11DeviceContext_OMSetRenderTargets(d3d_dev->d3dcontext, 1, &d3drenderTargetView[i], NULL);
 
         ID3D11DeviceContext_DrawIndexed(d3d_dev->d3dcontext, quad->indexCount, 0, 0);
     }
@@ -1040,10 +1039,10 @@ int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format
 
     memcpy(colorspace.Colorspace, ppColorspace, sizeof(colorspace.Colorspace));
 
-    if (fmt->primaries != displayFormat->colorspace->primaries)
+    if (fmt->primaries != displayFormat->primaries)
     {
         GetPrimariesTransform(colorspace.Primaries, fmt->primaries,
-                              displayFormat->colorspace->primaries);
+                              displayFormat->primaries);
     }
 
     ShaderUpdateConstants(o, d3d_dev, quad, PS_CONST_COLORSPACE, &colorspace);

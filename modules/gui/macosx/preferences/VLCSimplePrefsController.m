@@ -35,14 +35,16 @@
 #import <vlc_modules.h>
 #import <vlc_plugin.h>
 #import <vlc_config_cat.h>
+#import <vlc_aout.h>
 
 #import "extensions/misc.h"
 #import "extensions/NSScreen+VLCAdditions.h"
+#import "extensions/NSString+Helpers.h"
 #import "main/CompatibilityFixes.h"
 #import "main/VLCMain.h"
 #import "main/VLCMain+OldPrefs.h"
+#import "os-integration/VLCClickerManager.h"
 #import "preferences/prefs.h"
-
 
 static struct {
     const char iso[6];
@@ -53,13 +55,18 @@ static struct {
     { "auto",  N_("Auto"),              NO },
     { "en",    "American English",      NO },
     { "ar",    "عربي",                  YES },
-    { "bn",    "বাংলা",                  NO },
+    { "an",    "Aragonés",              NO },
+    { "as_IN", "অসমীয়া",                 NO },
+    { "ast",   "Asturianu",             NO },
+    { "be",    "беларуская мова",       NO },
+    { "brx",   "बर'/बड़",                 NO },
+    { "bn",    "বাংলা",                   NO },
     { "pt_BR", "Português Brasileiro",  NO },
     { "en_GB", "British English",       NO },
     { "el",    "Νέα Ελληνικά",          NO },
     { "bg",    "български език",        NO },
     { "ca",    "Català",                NO },
-    { "zh_TW", "正體中文",               NO },
+    { "zh_TW", "正體中文",                NO },
     { "cs",    "Čeština",               NO },
     { "cy",    "Cymraeg",               NO },
     { "da",    "Dansk",                 NO },
@@ -71,19 +78,20 @@ static struct {
     { "ga",    "Gaeilge",               NO },
     { "gd",    "Gàidhlig",              NO },
     { "gl",    "Galego",                NO },
-    { "ka",    "ქართული",               NO },
+    { "gu",    "ગુજરાતી",                 NO },
     { "de",    "Deutsch",               NO },
-    { "he",    "עברית",                  YES },
+    { "he",    "עברית",                 YES },
     { "hr",    "hrvatski",              NO },
+    { "kn",    "ಕನ್ನಡ",                   NO },
+    { "lv",    "Latviešu valoda",       NO },
     { "hu",    "Magyar",                NO },
-    { "hy",    "հայերեն",                NO },
+    { "mr",    "मराठी",                   NO },
     { "is",    "íslenska",              NO },
     { "id",    "Bahasa Indonesia",      NO },
     { "it",    "Italiano",              NO },
     { "ja",    "日本語",                 NO },
     { "ko",    "한국어",                  NO },
     { "lt",    "lietuvių",              NO },
-    { "mn",    "Монгол хэл",            NO },
     { "ms",    "Melayu",                NO },
     { "nb",    "Bokmål",                NO },
     { "nn",    "Nynorsk",               NO },
@@ -91,21 +99,20 @@ static struct {
     { "km",    "ភាសាខ្មែរ",                NO },
     { "ne",    "नेपाली",                  NO },
     { "oc",    "Occitan",               NO },
-    { "fa",    "فارسی",                 YES },
     { "pl",    "Polski",                NO },
     { "pt_PT", "Português",             NO },
     { "pa",    "ਪੰਜਾਬੀ",                  NO },
     { "ro",    "Română",                NO },
     { "ru",    "Русский",               NO },
-    { "zh_CN", "简体中文",               NO },
-    { "si",    "සිංහල",                NO },
+    { "zh_CN", "简体中文",                NO },
+    { "si",    "සිංහල",                   NO },
     { "sr",    "српски",                NO },
     { "sk",    "Slovensky",             NO },
     { "sl",    "slovenščina",           NO },
-    { "ckb",   "کوردیی سۆرانی",         YES },
     { "es",    "Español",               NO },
+    { "es_MX", "Español Mexicano",      NO },
     { "sv",    "Svenska",               NO },
-    { "te",    "తెలుగు",                 NO },
+    { "th",    "ภาษาไทย",               NO },
     { "tr",    "Türkçe",                NO },
     { "uk",    "украї́нська мо́ва",       NO },
     { "vi",    "tiếng Việt",            NO },

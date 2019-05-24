@@ -30,23 +30,11 @@
 #define DEFAULT_SRGB_BRIGHTNESS    100
 #define MAX_PQ_BRIGHTNESS        10000
 
-typedef enum video_color_axis {
-    COLOR_AXIS_RGB,
-    COLOR_AXIS_YCBCR,
-} video_color_axis;
-
 typedef struct {
-    DXGI_COLOR_SPACE_TYPE   dxgi;
-    const char              *name;
-    video_color_axis        axis;
-    video_color_primaries_t primaries;
-    video_transfer_func_t   transfer;
-    video_color_space_t     color;
-    bool                    b_full_range;
-} dxgi_color_space;
-
-typedef struct {
-    const dxgi_color_space   *colorspace;
+    video_color_primaries_t  primaries;
+    video_transfer_func_t    transfer;
+    video_color_space_t      color;
+    bool                     b_full_range;
     unsigned                 luminance_peak;
     const d3d_format_t       *pixelFormat;
 } display_info_t;
@@ -104,6 +92,8 @@ typedef struct
     PS_CONSTANT_BUFFER        shaderConstants;
 } d3d_quad_t;
 
+#define D3D11_MAX_RENDER_TARGET    2
+
 ID3DBlob* D3D11_CompileShader(vlc_object_t *, const d3d11_handle_t *, const d3d11_device_t *,
                               const char *psz_shader, bool pixel);
 #define D3D11_CompileShader(a,b,c,d,e)  D3D11_CompileShader(VLC_OBJECT(a),b,c,d,e)
@@ -129,10 +119,10 @@ float GetFormatLuminance(vlc_object_t *, const video_format_t *);
 #define GetFormatLuminance(a,b)  GetFormatLuminance(VLC_OBJECT(a),b)
 
 HRESULT D3D11_CreateRenderTargets(d3d11_device_t *, ID3D11Resource *, const d3d_format_t *,
-                                  ID3D11RenderTargetView *output[D3D11_MAX_SHADER_VIEW]);
+                                  ID3D11RenderTargetView *output[D3D11_MAX_RENDER_TARGET]);
 
 void D3D11_ClearRenderTargets(d3d11_device_t *, const d3d_format_t *,
-                              ID3D11RenderTargetView *targets[D3D11_MAX_SHADER_VIEW]);
+                              ID3D11RenderTargetView *targets[D3D11_MAX_RENDER_TARGET]);
 
 void D3D11_SetVertexShader(d3d_vshader_t *dst, d3d_vshader_t *src);
 void D3D11_ReleaseVertexShader(d3d_vshader_t *);

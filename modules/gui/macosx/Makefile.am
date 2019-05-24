@@ -30,12 +30,18 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/coreinteraction/VLCHotkeysController.m \
 	gui/macosx/coreinteraction/VLCVideoFilterHelper.h \
 	gui/macosx/coreinteraction/VLCVideoFilterHelper.m \
+	gui/macosx/extensions/NSColor+VLCAdditions.h \
+	gui/macosx/extensions/NSColor+VLCAdditions.m \
+	gui/macosx/extensions/NSFont+VLCAdditions.h \
+	gui/macosx/extensions/NSFont+VLCAdditions.m \
 	gui/macosx/extensions/NSScreen+VLCAdditions.h \
 	gui/macosx/extensions/NSScreen+VLCAdditions.m \
 	gui/macosx/extensions/NSSound+VLCAdditions.h \
 	gui/macosx/extensions/NSSound+VLCAdditions.m \
 	gui/macosx/extensions/NSString+Helpers.h \
 	gui/macosx/extensions/NSString+Helpers.m \
+	gui/macosx/extensions/NSView+VLCAdditions.h \
+	gui/macosx/extensions/NSView+VLCAdditions.m \
 	gui/macosx/extensions/VLCHexNumberFormatter.h \
 	gui/macosx/extensions/VLCHexNumberFormatter.m \
 	gui/macosx/extensions/misc.h \
@@ -44,8 +50,32 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/imported/AppleRemote/AppleRemote.m \
 	gui/macosx/imported/SPMediaKeyTap/SPMediaKeyTap.h \
 	gui/macosx/imported/SPMediaKeyTap/SPMediaKeyTap.m \
+	gui/macosx/library/VLCInputItem.h \
+	gui/macosx/library/VLCInputItem.m \
+	gui/macosx/library/VLCLibraryAlbumTableCellView.h \
+	gui/macosx/library/VLCLibraryAlbumTableCellView.m \
+	gui/macosx/library/VLCLibraryAlternativeAudioViewController.h \
+	gui/macosx/library/VLCLibraryAlternativeAudioViewController.m \
+	gui/macosx/library/VLCLibraryAudioDataSource.h \
+	gui/macosx/library/VLCLibraryAudioDataSource.m \
 	gui/macosx/library/VLCLibraryCollectionViewItem.h \
 	gui/macosx/library/VLCLibraryCollectionViewItem.m \
+	gui/macosx/library/VLCLibraryCollectionViewSupplementaryElementView.h \
+	gui/macosx/library/VLCLibraryCollectionViewSupplementaryElementView.m \
+	gui/macosx/library/VLCLibraryController.h \
+	gui/macosx/library/VLCLibraryController.m \
+	gui/macosx/library/VLCLibraryDataTypes.h \
+	gui/macosx/library/VLCLibraryDataTypes.m \
+	gui/macosx/library/VLCLibraryFolderManagementWindow.h \
+	gui/macosx/library/VLCLibraryFolderManagementWindow.m \
+	gui/macosx/library/VLCLibraryMenuController.h \
+	gui/macosx/library/VLCLibraryMenuController.m \
+	gui/macosx/library/VLCLibraryModel.h \
+	gui/macosx/library/VLCLibraryModel.m \
+	gui/macosx/library/VLCLibraryTableCellView.h \
+	gui/macosx/library/VLCLibraryTableCellView.m \
+	gui/macosx/library/VLCLibraryVideoDataSource.h \
+	gui/macosx/library/VLCLibraryVideoDataSource.m \
 	gui/macosx/library/VLCLibraryWindow.h \
 	gui/macosx/library/VLCLibraryWindow.m \
 	gui/macosx/main/CompatibilityFixes.h \
@@ -57,6 +87,14 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/main/VLCMain.h \
 	gui/macosx/main/VLCMain.m \
 	gui/macosx/main/macosx.m \
+	gui/macosx/media-source/VLCMediaSource.h \
+	gui/macosx/media-source/VLCMediaSource.m \
+	gui/macosx/media-source/VLCMediaSourceCollectionViewItem.h \
+	gui/macosx/media-source/VLCMediaSourceCollectionViewItem.m \
+	gui/macosx/media-source/VLCMediaSourceDataSource.h \
+	gui/macosx/media-source/VLCMediaSourceDataSource.m \
+	gui/macosx/media-source/VLCMediaSourceProvider.h \
+	gui/macosx/media-source/VLCMediaSourceProvider.m \
 	gui/macosx/menus/VLCMainMenu.h \
 	gui/macosx/menus/VLCMainMenu.m \
 	gui/macosx/menus/VLCStatusBarIcon.h \
@@ -143,6 +181,10 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/views/VLCHUDTableView.m \
 	gui/macosx/views/VLCImageButton.h \
 	gui/macosx/views/VLCImageButton.m \
+	gui/macosx/views/VLCImageView.h \
+	gui/macosx/views/VLCImageView.m \
+	gui/macosx/views/VLCLinearProgressIndicator.h \
+	gui/macosx/views/VLCLinearProgressIndicator.m \
 	gui/macosx/views/VLCScrollingClipView.h \
 	gui/macosx/views/VLCScrollingClipView.m \
 	gui/macosx/views/VLCSlider.h \
@@ -151,6 +193,8 @@ libmacosx_plugin_la_SOURCES = \
 	gui/macosx/views/VLCSliderCell.m \
 	gui/macosx/views/VLCTimeField.h \
 	gui/macosx/views/VLCTimeField.m \
+	gui/macosx/views/VLCTrackingView.h \
+	gui/macosx/views/VLCTrackingView.m \
 	gui/macosx/views/VLCVolumeSlider.h \
 	gui/macosx/views/VLCVolumeSlider.m \
 	gui/macosx/views/VLCVolumeSliderCell.h \
@@ -217,10 +261,14 @@ libmacosx_plugin_la_XIB_SOURCES = \
 	gui/macosx/UI/Help.xib \
 	gui/macosx/UI/LogMessageWindow.xib \
 	gui/macosx/UI/MainMenu.xib \
+	gui/macosx/UI/VLCLibraryAlbumTableCellView.xib \
 	gui/macosx/UI/VLCLibraryWindow.xib \
+	gui/macosx/UI/VLCLibraryFolderManagementWindow.xib \
+	gui/macosx/UI/VLCLibraryTableCellView.xib \
 	gui/macosx/UI/VLCPlaylistMenu.xib \
 	gui/macosx/UI/VLCPlaylistTableCellView.xib \
 	gui/macosx/UI/VLCLibraryCollectionViewItem.xib \
+	gui/macosx/UI/VLCMediaSourceCollectionViewItem.xib \
 	gui/macosx/UI/MediaInfo.xib \
 	gui/macosx/UI/Open.xib \
 	gui/macosx/UI/PlaylistAccessoryView.xib \
@@ -267,8 +315,20 @@ libmacosx_plugin_la_RES = \
 	gui/macosx/Resources/File-Icons/wav.icns \
 	gui/macosx/Resources/File-Icons/wma.icns \
 	gui/macosx/Resources/File-Icons/wmv.icns \
-	gui/macosx/Resources/librarywindow/libraryCellGradient@1x.png \
-	gui/macosx/Resources/librarywindow/libraryCellGradient@2x.png \
+	gui/macosx/Resources/librarywindow/ellipsis.png \
+	gui/macosx/Resources/librarywindow/ellipsis@2x.png \
+	gui/macosx/Resources/librarywindow/libraryPlay.png \
+	gui/macosx/Resources/librarywindow/libraryPlay@2x.png \
+	gui/macosx/Resources/librarywindow/repeatAll.png \
+	gui/macosx/Resources/librarywindow/repeatAll@2x.png \
+	gui/macosx/Resources/librarywindow/repeatOff.png \
+	gui/macosx/Resources/librarywindow/repeatOff@2x.png \
+	gui/macosx/Resources/librarywindow/repeatOne.png \
+	gui/macosx/Resources/librarywindow/repeatOne@2x.png \
+	gui/macosx/Resources/librarywindow/shuffleOff.png \
+	gui/macosx/Resources/librarywindow/shuffleOff@2x.png \
+	gui/macosx/Resources/librarywindow/shuffleOn.png \
+	gui/macosx/Resources/librarywindow/shuffleOn@2x.png \
 	gui/macosx/Resources/mainwindow/backward-3btns-pressed.png \
 	gui/macosx/Resources/mainwindow/backward-3btns-pressed@2x.png \
 	gui/macosx/Resources/mainwindow/backward-3btns.png \

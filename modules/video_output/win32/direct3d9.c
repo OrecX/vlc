@@ -43,6 +43,12 @@
 #include <vlc_plugin.h>
 #include <vlc_vout_display.h>
 
+#include <vlc/libvlc.h>
+#include <vlc/libvlc_picture.h>
+#include <vlc/libvlc_media.h>
+#include <vlc/libvlc_renderer_discoverer.h>
+#include <vlc/libvlc_media_player.h>
+
 #include <windows.h>
 #include <d3d9.h>
 #ifdef HAVE_D3DX9EFFECT_H
@@ -165,10 +171,11 @@ struct vout_display_sys_t
 
     /* outside rendering */
     void *outside_opaque;
-    void (*swapCb)(void* opaque);
-    void (*endRenderCb)(void* opaque);
-    bool (*starRenderCb)(void* opaque);
-    bool (*resizeCb)(void* opaque, unsigned, unsigned);
+    libvlc_video_direct3d_device_setup_cb    setupDeviceCb;
+    libvlc_video_direct3d_device_cleanup_cb  cleanupDeviceCb;
+    libvlc_video_direct3d_update_output_cb   updateOutputCb;
+    libvlc_video_swap_cb                     swapCb;
+    libvlc_video_direct3d_start_end_rendering_cb startEndRenderingCb;
 };
 
 /* */
@@ -176,10 +183,9 @@ typedef struct
 {
     FLOAT       x,y,z;      // vertex untransformed position
     FLOAT       rhw;        // eye distance
-    D3DCOLOR    diffuse;    // diffuse color
     FLOAT       tu, tv;     // texture relative coordinates
 } CUSTOMVERTEX;
-#define D3DFVF_CUSTOMVERTEX (D3DFVF_XYZRHW|D3DFVF_DIFFUSE|D3DFVF_TEX1)
+#define D3DFVF_CUSTOMVERTEX (D3DFVF_XYZRHW|D3DFVF_TEX1)
 
 typedef struct d3d_region_t {
     D3DFORMAT          format;
@@ -207,7 +213,7 @@ static HINSTANCE Direct3D9LoadShaderLibrary(void)
     HINSTANCE instance = NULL;
     for (int i = 43; i > 23; --i) {
         WCHAR filename[16];
-        _snwprintf(filename, ARRAYSIZE(filename), TEXT("D3dx9_%d.dll"), i);
+        _snwprintf(filename, ARRAY_SIZE(filename), TEXT("D3dx9_%d.dll"), i);
         instance = LoadLibrary(filename);
         if (instance)
             break;
@@ -371,17 +377,17 @@ static void orientationVertexOrder(video_orientation_t orientation, int vertex_o
 }
 
 static void  Direct3D9SetupVertices(CUSTOMVERTEX *vertices,
-                                  const RECT *src, const RECT *src_clipped,
-                                  const RECT *dst,
+                                  const RECT *full_texture, const RECT *visible_texture,
+                                  const RECT *rect_in_display,
                                   int alpha,
                                   video_orientation_t orientation)
 {
     /* Vertices of the dst rectangle in the unrotated (clockwise) order. */
     const int vertices_coords[4][2] = {
-        { dst->left,  dst->top    },
-        { dst->right, dst->top    },
-        { dst->right, dst->bottom },
-        { dst->left,  dst->bottom },
+        { rect_in_display->left,  rect_in_display->top    },
+        { rect_in_display->right, rect_in_display->top    },
+        { rect_in_display->right, rect_in_display->bottom },
+        { rect_in_display->left,  rect_in_display->bottom },
     };
 
     /* Compute index remapping necessary to implement the rotation. */
@@ -393,22 +399,22 @@ static void  Direct3D9SetupVertices(CUSTOMVERTEX *vertices,
         vertices[i].y  = vertices_coords[vertex_order[i]][1];
     }
 
-    float right = (float)src_clipped->right / (float)src->right;
-    float left = (float)src_clipped->left / (float)src->right;
-    float top = (float)src_clipped->top / (float)src->bottom;
-    float bottom = (float)src_clipped->bottom / (float)src->bottom;
+    float texture_right  = (float)visible_texture->right / (float)full_texture->right;
+    float texture_left   = (float)visible_texture->left  / (float)full_texture->right;
+    float texture_top    = (float)visible_texture->top    / (float)full_texture->bottom;
+    float texture_bottom = (float)visible_texture->bottom / (float)full_texture->bottom;
 
-    vertices[0].tu = left;
-    vertices[0].tv = top;
+    vertices[0].tu = texture_left;
+    vertices[0].tv = texture_top;
 
-    vertices[1].tu = right;
-    vertices[1].tv = top;
+    vertices[1].tu = texture_right;
+    vertices[1].tv = texture_top;
 
-    vertices[2].tu = right;
-    vertices[2].tv = bottom;
+    vertices[2].tu = texture_right;
+    vertices[2].tv = texture_bottom;
 
-    vertices[3].tu = left;
-    vertices[3].tv = bottom;
+    vertices[3].tu = texture_left;
+    vertices[3].tv = texture_bottom;
 
     for (int i = 0; i < 4; i++) {
         /* -0.5f is a "feature" of DirectX and it seems to apply to Direct3d also */
@@ -418,7 +424,6 @@ static void  Direct3D9SetupVertices(CUSTOMVERTEX *vertices,
 
         vertices[i].z       = 0.0f;
         vertices[i].rhw     = 1.0f;
-        vertices[i].diffuse = D3DCOLOR_ARGB(alpha, 255, 255, 255);
     }
 }
 
@@ -447,21 +452,35 @@ static int Direct3D9ImportPicture(vout_display_t *vd,
 
     /* Copy picture surface into texture surface
      * color space conversion happen here */
-    RECT copy_rect = {
+    RECT source_visible_rect = {
         .left   = vd->source.i_x_offset,
         .right  = vd->source.i_x_offset + vd->source.i_visible_width,
         .top    = vd->source.i_y_offset,
         .bottom = vd->source.i_y_offset + vd->source.i_visible_height,
     };
+    RECT texture_visible_rect = {
+        .left   = 0,
+        .right  = vd->source.i_visible_width,
+        .top    = 0,
+        .bottom = vd->source.i_visible_height,
+    };
     // On nVidia & AMD, StretchRect will fail if the visible size isn't even.
     // When copying the entire buffer, the margin end up being blended in the actual picture
     // on nVidia (regardless of even/odd dimensions)
-    if ( copy_rect.right & 1 ) copy_rect.right++;
-    if ( copy_rect.left & 1 ) copy_rect.left--;
-    if ( copy_rect.bottom & 1 ) copy_rect.bottom++;
-    if ( copy_rect.top & 1 ) copy_rect.top--;
-    hr = IDirect3DDevice9_StretchRect(sys->d3d_dev.dev, source, &copy_rect, destination,
-                                      &copy_rect, D3DTEXF_NONE);
+    if (texture_visible_rect.right & 1)
+    {
+        texture_visible_rect.right++;
+        source_visible_rect.right++;
+    }
+    if (texture_visible_rect.bottom & 1)
+    {
+        texture_visible_rect.bottom++;
+        source_visible_rect.bottom++;
+    }
+
+    hr = IDirect3DDevice9_StretchRect(sys->d3d_dev.dev, source, &source_visible_rect,
+                                      destination, &texture_visible_rect,
+                                      D3DTEXF_NONE);
     IDirect3DSurface9_Release(destination);
     if (FAILED(hr)) {
         msg_Dbg(vd, "Failed StretchRect: source 0x%p 0x%0lx",
@@ -471,20 +490,22 @@ static int Direct3D9ImportPicture(vout_display_t *vd,
 
     /* */
     region->texture = sys->sceneTexture;
-    RECT rect_src = {
+    RECT texture_rect = {
         .left   = 0,
         .right  = vd->source.i_width,
         .top    = 0,
         .bottom = vd->source.i_height,
     };
-    RECT rect_dst = {
-        .left   = 0,
-        .right  = vd->sys->area.place.width,
-        .top    = 0,
-        .bottom = vd->sys->area.place.height,
+    RECT rect_in_display = {
+        .left   = sys->area.place.x,
+        .right  = sys->area.place.x + sys->area.place.width,
+        .top    = sys->area.place.y,
+        .bottom = sys->area.place.y + sys->area.place.height,
     };
-    Direct3D9SetupVertices(region->vertex, &rect_src, &copy_rect,
-                           &rect_dst, 255, vd->source.orientation);
+    texture_visible_rect.right  = vd->source.i_visible_width;
+    texture_visible_rect.bottom = vd->source.i_visible_height;
+    Direct3D9SetupVertices(region->vertex, &texture_rect, &texture_visible_rect,
+                           &rect_in_display, 255, vd->source.orientation);
     return VLC_SUCCESS;
 }
 
@@ -552,6 +573,52 @@ static void Direct3D9DestroyResources(vout_display_t *vd)
     Direct3D9DestroyShaders(vd);
 }
 
+static int UpdateOutput(vout_display_t *vd, const video_format_t *fmt)
+{
+    vout_display_sys_t *sys = vd->sys;
+    libvlc_video_direct3d_cfg_t cfg;
+    cfg.width  = sys->area.vdcfg.display.width;
+    cfg.height = sys->area.vdcfg.display.height;
+
+    switch (fmt->i_chroma)
+    {
+    case VLC_CODEC_D3D9_OPAQUE:
+        cfg.bitdepth = 8;
+        break;
+    case VLC_CODEC_D3D9_OPAQUE_10B:
+        cfg.bitdepth = 10;
+        break;
+    default:
+        {
+            const vlc_chroma_description_t *p_format = vlc_fourcc_GetChromaDescription(fmt->i_chroma);
+            if (p_format == NULL)
+            {
+                cfg.bitdepth = 8;
+            }
+            else
+            {
+                cfg.bitdepth = p_format->pixel_bits == 0 ? 8 : p_format->pixel_bits /
+                                                               (p_format->plane_count==1 ? p_format->pixel_size : 1);
+            }
+        }
+        break;
+    }
+
+    cfg.full_range = fmt->color_range == COLOR_RANGE_FULL;
+    cfg.primaries  = fmt->primaries;
+    cfg.colorspace = fmt->space;
+    cfg.transfer   = fmt->transfer;
+
+    libvlc_video_output_cfg_t out;
+    if (!sys->updateOutputCb( sys->outside_opaque, &cfg, &out ))
+    {
+        msg_Err(vd, "Failed to set the external render size");
+        return VLC_EGENERIC;
+    }
+
+    return VLC_SUCCESS;
+}
+
 /**
  * It allocates and initializes the resources needed to render the scene.
  */
@@ -562,13 +629,16 @@ static int Direct3D9CreateScene(vout_display_t *vd, const video_format_t *fmt)
     IDirect3DDevice9        *d3ddev = p_d3d9_dev->dev;
     HRESULT hr;
 
-    if (sys->resizeCb && !sys->resizeCb( sys->outside_opaque,
-                                         fmt->i_visible_width,
-                                         fmt->i_visible_height ))
-    {
-        msg_Err(vd, "Failed to set the external render size");
+    if (UpdateOutput(vd, fmt) != VLC_SUCCESS)
         return VLC_EGENERIC;
-    }
+
+    UINT width  = fmt->i_visible_width;
+    UINT height = fmt->i_visible_height;
+    // On nVidia & AMD, StretchRect will fail if the visible size isn't even.
+    // When copying the entire buffer, the margin end up being blended in the actual picture
+    // on nVidia (regardless of even/odd dimensions)
+    if (height & 1) height++;
+    if (width  & 1) width++;
 
     /*
      * Create a texture for use when rendering a scene
@@ -576,8 +646,8 @@ static int Direct3D9CreateScene(vout_display_t *vd, const video_format_t *fmt)
      * which would usually be a RGB format
      */
     hr = IDirect3DDevice9_CreateTexture(d3ddev,
-                                        fmt->i_width,
-                                        fmt->i_height,
+                                        width,
+                                        height,
                                         1,
                                         D3DUSAGE_RENDERTARGET,
                                         p_d3d9_dev->pp.BackBufferFormat,
@@ -893,8 +963,6 @@ static int Direct3D9Reset(vout_display_t *vd, video_format_t *fmtp)
         return VLC_EGENERIC;
     }
 
-    UpdateRects(vd, &sys->area, &sys->sys);
-
     /* re-create them */
     if (Direct3D9CreateResources(vd, fmtp)) {
         msg_Dbg(vd, "Direct3D9CreateResources failed !");
@@ -1000,26 +1068,31 @@ static void Direct3D9ImportSubpicture(vout_display_t *vd,
         const float scale_w = (float)(sys->area.place.width)  / subpicture->i_original_picture_width;
         const float scale_h = (float)(sys->area.place.height) / subpicture->i_original_picture_height;
 
-        RECT dst;
-        dst.left   =            scale_w * r->i_x,
-        dst.right  = dst.left + scale_w * r->fmt.i_visible_width,
-        dst.top    =            scale_h * r->i_y,
-        dst.bottom = dst.top  + scale_h * r->fmt.i_visible_height;
+        RECT rect_in_display;
+        rect_in_display.left   =            scale_w * r->i_x,
+        rect_in_display.right  = rect_in_display.left + scale_w * r->fmt.i_visible_width,
+        rect_in_display.top    =            scale_h * r->i_y,
+        rect_in_display.bottom = rect_in_display.top  + scale_h * r->fmt.i_visible_height;
 
-        RECT src;
-        src.left = 0;
-        src.right = r->fmt.i_width;
-        src.top = 0;
-        src.bottom = r->fmt.i_height;
+        rect_in_display.left   += sys->area.place.x;
+        rect_in_display.right  += sys->area.place.x;
+        rect_in_display.top    += sys->area.place.y;
+        rect_in_display.bottom += sys->area.place.y;
 
-        RECT src_clipped;
-        src_clipped.left = r->fmt.i_x_offset;
-        src_clipped.right = r->fmt.i_x_offset + r->fmt.i_visible_width;
-        src_clipped.top = r->fmt.i_y_offset;
-        src_clipped.bottom = r->fmt.i_y_offset + r->fmt.i_visible_height;
+        RECT texture_rect;
+        texture_rect.left   = 0;
+        texture_rect.right  = r->fmt.i_width;
+        texture_rect.top    = 0;
+        texture_rect.bottom = r->fmt.i_height;
 
-        Direct3D9SetupVertices(d3dr->vertex, &src, &src_clipped,
-                              &dst, subpicture->i_alpha * r->i_alpha / 255, ORIENT_NORMAL);
+        RECT texture_visible_rect;
+        texture_visible_rect.left   = r->fmt.i_x_offset;
+        texture_visible_rect.right  = r->fmt.i_x_offset + r->fmt.i_visible_width;
+        texture_visible_rect.top    = r->fmt.i_y_offset;
+        texture_visible_rect.bottom = r->fmt.i_y_offset + r->fmt.i_visible_height;
+
+        Direct3D9SetupVertices(d3dr->vertex, &texture_rect, &texture_visible_rect,
+                              &rect_in_display, subpicture->i_alpha * r->i_alpha / 255, ORIENT_NORMAL);
     }
 }
 
@@ -1099,9 +1172,8 @@ static int Direct3D9RenderRegion(vout_display_t *vd,
     return 0;
 }
 
-static bool StartRendering(void *opaque)
+static bool StartRendering(vout_display_t *vd)
 {
-    vout_display_t *vd = opaque;
     vout_display_sys_t *sys = vd->sys;
     IDirect3DDevice9 *d3ddev = sys->d3d_dev.dev;
     HRESULT hr;
@@ -1126,9 +1198,8 @@ static bool StartRendering(void *opaque)
     return true;
 }
 
-static void EndRendering(void *opaque)
+static void EndRendering(vout_display_t *vd)
 {
-    vout_display_t *vd = opaque;
     vout_display_sys_t *sys = vd->sys;
     IDirect3DDevice9 *d3ddev = sys->d3d_dev.dev;
     HRESULT hr;
@@ -1153,7 +1224,7 @@ static void Direct3D9RenderScene(vout_display_t *vd,
     vout_display_sys_t *sys = vd->sys;
     IDirect3DDevice9 *d3ddev = sys->d3d_dev.dev;
 
-    if (!sys->starRenderCb(sys->outside_opaque))
+    if (!sys->startEndRenderingCb( sys->outside_opaque, true, NULL ))
         return;
 
     Direct3D9RenderRegion(vd, picture, true);
@@ -1169,7 +1240,7 @@ static void Direct3D9RenderScene(vout_display_t *vd,
         IDirect3DDevice9_SetRenderState(d3ddev, D3DRS_ALPHABLENDENABLE, FALSE);
     }
 
-    sys->endRenderCb(sys->outside_opaque);
+    sys->startEndRenderingCb( sys->outside_opaque, false, NULL );
 }
 
 static void Prepare(vout_display_t *vd, picture_t *picture,
@@ -1196,6 +1267,8 @@ static void Prepare(vout_display_t *vd, picture_t *picture,
                 return VLC_EGENERIC;
         }
 #endif
+        UpdateOutput(vd, &vd->fmt);
+
         sys->clear_scene = true;
         sys->area.place_changed = false;
     }
@@ -1286,9 +1359,8 @@ static void Prepare(vout_display_t *vd, picture_t *picture,
     }
 }
 
-static void Swap(void *opaque)
+static void Swap(vout_display_t *vd)
 {
-    vout_display_t *vd = opaque;
     vout_display_sys_t *sys = vd->sys;
     const d3d9_device_t *p_d3d9_dev = &sys->d3d_dev;
 
@@ -1296,11 +1368,11 @@ static void Swap(void *opaque)
     // No stretching should happen here !
     RECT src = {
         .left   = 0,
-        .right  = sys->area.place.width,
+        .right  = sys->area.vdcfg.display.width,
         .top    = 0,
-        .bottom = sys->area.place.height
+        .bottom = sys->area.vdcfg.display.height
     };
-    
+
     HRESULT hr;
     if (sys->hd3d.use_ex) {
         hr = IDirect3DDevice9Ex_PresentEx(p_d3d9_dev->devex, &src, &src, NULL, NULL, 0);
@@ -1319,7 +1391,7 @@ static void Display(vout_display_t *vd, picture_t *picture)
     if (sys->lost_not_ready)
         return;
 
-    sys->swapCb(sys->outside_opaque);
+    sys->swapCb( sys->outside_opaque );
 }
 
 /**
@@ -1334,6 +1406,9 @@ static void Direct3D9Destroy(vout_display_sys_t *sys)
         FreeLibrary(sys->hxdll);
         sys->hxdll = NULL;
     }
+
+    if ( sys->cleanupDeviceCb )
+        sys->cleanupDeviceCb( sys->outside_opaque );
 }
 
 /**
@@ -1467,8 +1542,6 @@ static int Direct3D9Open(vout_display_t *vd, video_format_t *fmt,
     fmt->i_bmask  = d3dfmt->bmask;
     sys->sw_texture_fmt = d3dfmt;
 
-    UpdateRects(vd, &sys->area, &sys->sys);
-
     if (Direct3D9CreateResources(vd, fmt)) {
         msg_Err(vd, "Failed to allocate resources");
         goto error;
@@ -1517,7 +1590,7 @@ static int Control(vout_display_t *vd, int query, va_list args)
         return VLC_SUCCESS;
     }
     default:
-        return CommonControl(vd, &sys->area, &sys->sys, query, args);
+        return CommonControl(VLC_OBJECT(vd), &sys->area, &sys->sys, query, args);
     }
 }
 
@@ -1558,6 +1631,37 @@ static int FindShadersCallback(const char *name, char ***values, char ***descs)
 
 }
 
+static bool LocalSwapchainSetupDevice( void **opaque, const libvlc_video_direct3d_device_cfg_t *cfg, libvlc_video_direct3d_device_setup_t *out )
+{
+    return false; /* don't use an "external" D3D9 device */
+}
+
+static bool LocalSwapchainUpdateOutput( void *opaque, const libvlc_video_direct3d_cfg_t *cfg, libvlc_video_output_cfg_t *out )
+{
+    vout_display_t *vd = opaque;
+    out->surface_format = vd->sys->d3d_dev.pp.BackBufferFormat;
+    return true;
+}
+
+static void LocalSwapchainSwap( void *opaque )
+{
+    vout_display_t *vd = opaque;
+    Swap( vd );
+}
+
+static bool LocalSwapchainStartEndRendering( void *opaque, bool enter, const libvlc_video_direct3d_hdr10_metadata_t *p_hdr10 )
+{
+    VLC_UNUSED(p_hdr10);
+    vout_display_t *vd = opaque;
+    if ( enter )
+    {
+        return StartRendering( vd );
+    }
+
+    EndRendering( vd );
+    return true;
+}
+
 /**
  * It creates a Direct3D vout display.
  */
@@ -1588,29 +1692,52 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
     if (!sys)
         return VLC_ENOMEM;
 
-    IDirect3DDevice9 *d3d9_device = var_InheritAddress(vd, "vout-engine-ctx");
+    sys->outside_opaque = var_InheritAddress( vd, "vout-cb-opaque" );
+    sys->setupDeviceCb       = var_InheritAddress( vd, "vout-cb-setup" );
+    sys->cleanupDeviceCb     = var_InheritAddress( vd, "vout-cb-cleanup" );
+    sys->updateOutputCb      = var_InheritAddress( vd, "vout-cb-update-output" );
+    sys->swapCb              = var_InheritAddress( vd, "vout-cb-swap" );
+    sys->startEndRenderingCb = var_InheritAddress( vd, "vout-cb-make-current" );
+
+    if ( sys->setupDeviceCb == NULL || sys->swapCb == NULL || sys->startEndRenderingCb == NULL || sys->updateOutputCb == NULL )
+    {
+        /* use our own callbacks, since there isn't any external ones */
+        sys->outside_opaque = vd;
+        sys->setupDeviceCb       = LocalSwapchainSetupDevice;
+        sys->cleanupDeviceCb     = NULL;
+        sys->updateOutputCb      = LocalSwapchainUpdateOutput;
+        sys->swapCb              = LocalSwapchainSwap;
+        sys->startEndRenderingCb = LocalSwapchainStartEndRendering;
+    }
+
+    libvlc_video_direct3d_device_cfg_t surface_cfg = {
+        .hardware_decoding = is_d3d9_opaque( vd->source.i_chroma )
+    };
+    libvlc_video_direct3d_device_setup_t device_setup;
+    IDirect3DDevice9 *d3d9_device = NULL;
+    if ( sys->setupDeviceCb( &sys->outside_opaque, &surface_cfg, &device_setup ) )
+        d3d9_device = device_setup.device_context;
+    if ( d3d9_device == NULL && sys->setupDeviceCb != LocalSwapchainSetupDevice )
+    {
+        msg_Err(vd, "Missing external IDirect3DDevice9");
+        return VLC_EGENERIC;
+    }
     if (d3d9_device != NULL)
     {
         if (D3D9_CreateExternal(vd, &sys->hd3d, d3d9_device)) {
             msg_Err(vd, "External Direct3D9 could not be used");
+            if ( sys->cleanupDeviceCb )
+                sys->cleanupDeviceCb( sys->outside_opaque );
             free(sys);
             return VLC_EGENERIC;
         }
     }
     else if (D3D9_Create(vd, &sys->hd3d)) {
-        msg_Err(vd, "Direct3D9 could not be initialized");
-        free(sys);
+        msg_Err( vd, "Direct3D9 could not be initialized" );
+        if ( sys->cleanupDeviceCb )
+            sys->cleanupDeviceCb( sys->outside_opaque );
+        free( sys );
         return VLC_EGENERIC;
-    }
-
-    if (!sys->swapCb || !sys->starRenderCb || !sys->endRenderCb)
-    {
-        /* use our own callbacks, since there isn't any external ones */
-        sys->outside_opaque = vd;
-        sys->swapCb         = Swap;
-        sys->starRenderCb   = StartRendering;
-        sys->endRenderCb    = EndRendering;
-        sys->resizeCb       = NULL;
     }
 
     sys->hxdll = Direct3D9LoadShaderLibrary();
@@ -1621,11 +1748,15 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
     sys->lost_not_ready = false;
     sys->allow_hw_yuv = var_CreateGetBool(vd, "directx-hw-yuv");
 
-    InitArea(vd, &sys->area, cfg);
+    CommonInit(vd, &sys->area, cfg);
     if (d3d9_device == NULL)
     {
-        if (CommonInit(VLC_OBJECT(vd), &sys->area, &sys->sys, false))
+        if (CommonWindowInit(VLC_OBJECT(vd), &sys->area, &sys->sys, false))
             goto error;
+    }
+    else
+    {
+        CommonPlacePicture(VLC_OBJECT(vd), &sys->area, &sys->sys);
     }
 
     /* */
@@ -1637,7 +1768,6 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
 
     /* Setup vout_display now that everything is fine */
     vd->info.is_slow = false;
-    vd->info.has_double_click = true;
     vd->info.has_pictures_invalid = !is_d3d9_opaque(fmt.i_chroma);
 
     if (var_InheritBool(vd, "direct3d9-hw-blending") &&
@@ -1663,7 +1793,7 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
     return VLC_SUCCESS;
 error:
     Direct3D9Close(vd);
-    CommonClean(VLC_OBJECT(vd), &sys->sys);
+    CommonWindowClean(VLC_OBJECT(vd), &sys->sys);
     Direct3D9Destroy(sys);
     free(vd->sys);
     return VLC_EGENERIC;
@@ -1676,7 +1806,7 @@ static void Close(vout_display_t *vd)
 {
     Direct3D9Close(vd);
 
-    CommonClean(VLC_OBJECT(vd), &vd->sys->sys);
+    CommonWindowClean(VLC_OBJECT(vd), &vd->sys->sys);
 
     Direct3D9Destroy(vd->sys);
 

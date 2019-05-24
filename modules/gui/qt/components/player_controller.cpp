@@ -196,13 +196,21 @@ static  void on_player_current_media_changed(vlc_player_t *, input_item_t *new_m
 {
     PlayerControllerPrivate* that = static_cast<PlayerControllerPrivate*>(data);
     msg_Dbg( that->p_intf, "on_player_current_media_changed");
+
+    if (!new_media)
+        emit that->q_func()->inputChanged(false);
+    return;
+
     InputItemPtr newMediaPtr = InputItemPtr( new_media );
     that->callAsync([that,newMediaPtr] () {
         PlayerController* q = that->q_func();
         that->UpdateName( newMediaPtr.get() );
         that->UpdateArt( newMediaPtr.get() );
         that->UpdateMeta( newMediaPtr.get() );
-        emit q->inputChanged( newMediaPtr != nullptr );
+
+        RecentsMRL::getInstance( that->p_intf )->addRecent( newMediaPtr.get()->psz_uri );
+
+        emit q->inputChanged(true);
     });
 }
 
@@ -320,18 +328,38 @@ static void on_player_rate_changed(vlc_player_t *, float new_rate, void *data)
     });
 }
 
-static void on_player_capabilities_changed(vlc_player_t *, int new_caps, void *data)
+static void on_player_capabilities_changed(vlc_player_t *, int old_caps, int new_caps, void *data)
 {
     PlayerControllerPrivate* that = static_cast<PlayerControllerPrivate*>(data);
     msg_Dbg( that->p_intf, "on_player_capabilities_changed");
-    that->callAsync([that,new_caps](){
+    that->callAsync([that, old_caps, new_caps]() {
         PlayerController* q = that->q_func();
         that->m_capabilities = new_caps;
-        emit q->seekableChanged( (new_caps & VLC_INPUT_CAPABILITIES_SEEKABLE) != 0 );
-        emit q->rewindableChanged( (new_caps & VLC_INPUT_CAPABILITIES_REWINDABLE) != 0 );
-        emit q->pausableChanged( (new_caps & VLC_INPUT_CAPABILITIES_PAUSEABLE) != 0 );
-        emit q->recordableChanged( (new_caps & VLC_INPUT_CAPABILITIES_RECORDABLE) != 0 );
-        emit q->rateChangableChanged( (new_caps & VLC_INPUT_CAPABILITIES_CHANGE_RATE) != 0 );
+
+        bool oldSeekable = old_caps & VLC_INPUT_CAPABILITIES_SEEKABLE;
+        bool newSeekable = new_caps & VLC_INPUT_CAPABILITIES_SEEKABLE;
+        if (newSeekable != oldSeekable)
+            emit q->seekableChanged( newSeekable );
+
+        bool oldRewindable = old_caps & VLC_INPUT_CAPABILITIES_REWINDABLE;
+        bool newRewindable = new_caps & VLC_INPUT_CAPABILITIES_REWINDABLE;
+        if (newRewindable != oldRewindable)
+            emit q->rewindableChanged( newRewindable );
+
+        bool oldPauseable = old_caps & VLC_INPUT_CAPABILITIES_PAUSEABLE;
+        bool newPauseable = new_caps & VLC_INPUT_CAPABILITIES_PAUSEABLE;
+        if (newPauseable != oldPauseable)
+            emit q->pausableChanged( newPauseable );
+
+        bool oldRecordable = old_caps & VLC_INPUT_CAPABILITIES_RECORDABLE;
+        bool newRecordable = new_caps & VLC_INPUT_CAPABILITIES_RECORDABLE;
+        if (newRecordable != oldRecordable)
+            emit q->recordableChanged( newRecordable);
+
+        bool oldChangeRate = old_caps & VLC_INPUT_CAPABILITIES_CHANGE_RATE;
+        bool newChangeRate = new_caps & VLC_INPUT_CAPABILITIES_CHANGE_RATE;
+        if (newChangeRate != oldChangeRate)
+            emit q->rateChangableChanged( newChangeRate );
     });
 
     //FIXME other events?
@@ -683,7 +711,7 @@ static void on_player_subitems_changed(vlc_player_t *, input_item_t *, input_ite
 }
 
 
-static void on_player_vout_list_changed(vlc_player_t *player, enum vlc_player_list_action, vout_thread_t *, void *data)
+static void on_player_vout_changed(vlc_player_t *player, enum vlc_player_vout_action, vout_thread_t *, void *data)
 {
     PlayerControllerPrivate* that = static_cast<PlayerControllerPrivate*>(data);
     msg_Dbg( that->p_intf, "on_player_vout_list_changed");
@@ -804,7 +832,7 @@ static const struct vlc_player_cbs player_cbs = {
     on_player_media_meta_changed,
     on_player_media_epg_changed,
     on_player_subitems_changed,
-    on_player_vout_list_changed,
+    on_player_vout_changed,
     on_player_corks_changed
 };
 
@@ -1170,16 +1198,10 @@ PlayerController::VoutPtr PlayerController::getVout()
 {
     Q_D(PlayerController);
     vlc_player_locker lock{ d->m_player };
-    size_t count = 0;
-    vout_thread_t** vouts = vlc_player_vout_HoldAll( d->m_player, &count );
-    if( count == 0 || vouts == NULL )
+    vout_thread_t* vout = vlc_player_vout_Hold( d->m_player );
+    if( vout == NULL )
         return VoutPtr{};
-    //add a reference
-    VoutPtr first_vout{vouts[0], true};
-    for( size_t i = 0; i < count; i++ )
-        vout_Release(vouts[i]);
-    free( vouts );
-    return first_vout;
+    return VoutPtr{vout, false};
 }
 
 void PlayerController::setFullscreen( bool new_val )

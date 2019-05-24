@@ -205,17 +205,6 @@ size_t IsoffMainParser::parseSegmentInformation(Node *node, SegmentInformation *
     total += parseSegmentBase(DOMHelper::getFirstChildElementByName(node, "SegmentBase"), info);
     total += parseSegmentList(DOMHelper::getFirstChildElementByName(node, "SegmentList"), info);
     total += parseSegmentTemplate(DOMHelper::getFirstChildElementByName(node, "SegmentTemplate" ), info);
-    if(node->hasAttribute("bitstreamSwitching") && node->getAttributeValue("bitstreamSwitching") == "true")
-    {
-        info->setSwitchPolicy(SegmentInformation::SWITCH_BITSWITCHEABLE);
-    }
-    else if(node->hasAttribute("segmentAlignment"))
-    {
-        if( node->getAttributeValue("segmentAlignment") == "true" )
-            info->setSwitchPolicy(SegmentInformation::SWITCH_SEGMENT_ALIGNED);
-        else
-            info->setSwitchPolicy(SegmentInformation::SWITCH_UNAVAILABLE);
-    }
     if(node->hasAttribute("timescale"))
         info->setTimescale(Integer<uint64_t>(node->getAttributeValue("timescale")));
 
@@ -242,14 +231,13 @@ void    IsoffMainParser::parseAdaptationSets  (Node *periodNode, Period *period)
             adaptationSet->setMimeType((*it)->getAttributeValue("mimeType"));
 
         if((*it)->hasAttribute("lang"))
-        {
-            std::string lang = (*it)->getAttributeValue("lang");
-            std::size_t pos = lang.find_first_of('-');
-            if(pos != std::string::npos && pos > 0)
-                adaptationSet->addLang(lang.substr(0, pos));
-            else if (lang.size() < 4)
-                adaptationSet->addLang(lang);
-        }
+            adaptationSet->setLang((*it)->getAttributeValue("lang"));
+
+        if((*it)->hasAttribute("bitstreamSwitching"))
+            adaptationSet->setBitswitchAble((*it)->getAttributeValue("bitstreamSwitching") == "true");
+
+        if((*it)->hasAttribute("segmentAlignment"))
+            adaptationSet->setSegmentAligned((*it)->getAttributeValue("segmentAlignment") == "true");
 
         Node *baseUrl = DOMHelper::getFirstChildElementByName((*it), "BaseURL");
         if(baseUrl)
@@ -260,7 +248,24 @@ void    IsoffMainParser::parseAdaptationSets  (Node *periodNode, Period *period)
         {
             std::string uri = role->getAttributeValue("schemeIdUri");
             if(uri == "urn:mpeg:dash:role:2011")
-                adaptationSet->description.Set(role->getAttributeValue("value"));
+            {
+                const std::string &rolevalue = role->getAttributeValue("value");
+                adaptationSet->description.Set(rolevalue);
+                if(rolevalue == "main")
+                    adaptationSet->setRole(Role::ROLE_MAIN);
+                else if(rolevalue == "alternate")
+                    adaptationSet->setRole(Role::ROLE_ALTERNATE);
+                else if(rolevalue == "supplementary")
+                    adaptationSet->setRole(Role::ROLE_SUPPLEMENTARY);
+                else if(rolevalue == "commentary")
+                    adaptationSet->setRole(Role::ROLE_COMMENTARY);
+                else if(rolevalue == "dub")
+                    adaptationSet->setRole(Role::ROLE_DUB);
+                else if(rolevalue == "caption")
+                    adaptationSet->setRole(Role::ROLE_CAPTION);
+                else if(rolevalue == "subtitle")
+                    adaptationSet->setRole(Role::ROLE_SUBTITLE);
+            }
         }
 #ifdef ADAPTATIVE_ADVANCED_DEBUG
         if(adaptationSet->description.Get().empty())
@@ -307,18 +312,7 @@ void    IsoffMainParser::parseRepresentations (Node *adaptationSetNode, Adaptati
             currentRepresentation->setMimeType(repNode->getAttributeValue("mimeType"));
 
         if(repNode->hasAttribute("codecs"))
-        {
-            std::list<std::string> list = Helper::tokenize(repNode->getAttributeValue("codecs"), ',');
-            std::list<std::string>::const_iterator it;
-            for(it=list.begin(); it!=list.end(); ++it)
-            {
-                std::size_t pos = (*it).find_first_of('.', 0);
-                if(pos != std::string::npos)
-                    currentRepresentation->addCodec((*it).substr(0, pos));
-                else
-                    currentRepresentation->addCodec(*it);
-            }
-        }
+            currentRepresentation->addCodecs(repNode->getAttributeValue("codecs"));
 
         size_t i_total = parseSegmentInformation(repNode, currentRepresentation, &nextid);
         /* Empty Representation with just baseurl (ex: subtitles) */

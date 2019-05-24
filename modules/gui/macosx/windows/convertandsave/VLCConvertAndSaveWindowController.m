@@ -23,6 +23,8 @@
 #import "VLCConvertAndSaveWindowController.h"
 
 #import "extensions/misc.h"
+#import "extensions/NSString+Helpers.h"
+#import "extensions/NSView+VLCAdditions.h"
 #import "main/VLCMain.h"
 #import "panels/dialogs/VLCPopupPanelController.h"
 #import "panels/dialogs/VLCTextfieldPanelController.h"

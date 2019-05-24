@@ -37,24 +37,24 @@ namespace adaptive
     namespace http
     {
         class AbstractConnectionManager;
-        class AuthStorage;
     }
 
     using namespace playlist;
     using namespace logic;
-    using namespace http;
 
     class PlaylistManager
     {
         public:
             PlaylistManager( demux_t *,
-                             AuthStorage *,
+                             SharedResources *,
                              AbstractPlaylist *,
                              AbstractStreamFactory *,
                              AbstractAdaptationLogic::LogicType type );
             virtual ~PlaylistManager    ();
 
+            bool    init();
             bool    start();
+            bool    started() const;
             void    stop();
 
             AbstractStream::buffering_status bufferize(vlc_tick_t, vlc_tick_t, vlc_tick_t);
@@ -94,7 +94,7 @@ namespace adaptive
             virtual AbstractAdaptationLogic *createLogic(AbstractAdaptationLogic::LogicType,
                                                          AbstractConnectionManager *);
 
-            AuthStorage                         *authStorage;
+            SharedResources                     *resources;
             AbstractConnectionManager           *conManager;
             AbstractAdaptationLogic::LogicType  logicType;
             AbstractAdaptationLogic             *logic;
@@ -109,7 +109,7 @@ namespace adaptive
             {
                 vlc_tick_t  i_nzpcr;
                 vlc_tick_t  i_firstpcr;
-                vlc_mutex_t lock;
+                mutable vlc_mutex_t lock;
                 vlc_cond_t  cond;
             } demux;
 
@@ -124,7 +124,7 @@ namespace adaptive
                 vlc_tick_t  i_length;
                 vlc_tick_t  i_time;
                 double      f_position;
-                vlc_mutex_t lock;
+                mutable vlc_mutex_t lock;
             } cached;
 
         private:

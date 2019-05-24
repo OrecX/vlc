@@ -83,7 +83,7 @@ static int Control(vout_display_t *vd, int query, va_list args)
         return vout_display_opengl_SetViewpoint(sys->vgl,
             &va_arg (args, const vout_display_cfg_t* )->viewpoint);
 
-    return CommonControl(vd, &sys->area, &sys->sys, query, args);
+    return CommonControl(VLC_OBJECT(vd), &sys->area, &sys->sys, query, args);
 }
 
 static const struct vout_window_operations embedVideoWindow_Ops =
@@ -122,8 +122,8 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
         return VLC_ENOMEM;
 
     /* */
-    InitArea(vd, &sys->area, cfg);
-    if (CommonInit(VLC_OBJECT(vd), &sys->area, &sys->sys,
+    CommonInit(vd, &sys->area, cfg);
+    if (CommonWindowInit(VLC_OBJECT(vd), &sys->area, &sys->sys,
                    vd->source.projection_mode != PROJECTION_MODE_RECTANGULAR))
         goto error;
 
@@ -159,7 +159,6 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
         goto error;
 
     /* Setup vout_display now that everything is fine */
-    vd->info.has_double_click = true;
     vd->info.subpicture_chromas = subpicture_chromas;
 
     *fmtp    = fmt;
@@ -198,7 +197,7 @@ static void Close(vout_display_t *vd)
     }
 
     UnhookWindowsSensors(sys->p_sensors);
-    CommonClean(VLC_OBJECT(vd), &sys->sys);
+    CommonWindowClean(VLC_OBJECT(vd), &sys->sys);
 
     free(sys);
 }
@@ -228,7 +227,7 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
     if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
         return;
     vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)width / height);
-    vout_display_opengl_Viewport(sys->vgl, 0, 0, width, height);
+    vout_display_opengl_Viewport(sys->vgl, sys->area.place.x, sys->area.place.y, width, height);
     vout_display_opengl_Prepare (sys->vgl, picture, subpicture);
     vlc_gl_ReleaseCurrent (sys->gl);
 }

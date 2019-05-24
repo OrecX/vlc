@@ -531,65 +531,6 @@ typedef void (*input_thread_events_cb)( input_thread_t *input,
                                         const struct vlc_input_event *event,
                                         void *userdata);
 
-/**
- * Input queries
- */
-enum input_query_e
-{
-    /* Menu (VCD/DVD/BD) Navigation */
-    /** Activate the navigation item selected. res=can fail */
-    INPUT_NAV_ACTIVATE,
-    /** Use the up arrow to select a navigation item above. res=can fail */
-    INPUT_NAV_UP,
-    /** Use the down arrow to select a navigation item under. res=can fail */
-    INPUT_NAV_DOWN,
-    /** Use the left arrow to select a navigation item on the left. res=can fail */
-    INPUT_NAV_LEFT,
-    /** Use the right arrow to select a navigation item on the right. res=can fail */
-    INPUT_NAV_RIGHT,
-    /** Activate the popup Menu (for BD). res=can fail */
-    INPUT_NAV_POPUP,
-    /** Activate disc Root Menu. res=can fail */
-    INPUT_NAV_MENU,
-
-    /* bookmarks */
-    INPUT_GET_BOOKMARK,    /* arg1= seekpoint_t *               res=can fail */
-    INPUT_GET_BOOKMARKS,   /* arg1= seekpoint_t *** arg2= int * res=can fail */
-    INPUT_CLEAR_BOOKMARKS, /* res=can fail */
-    INPUT_ADD_BOOKMARK,    /* arg1= seekpoint_t *  res=can fail   */
-    INPUT_CHANGE_BOOKMARK, /* arg1= seekpoint_t * arg2= int * res=can fail   */
-    INPUT_DEL_BOOKMARK,    /* arg1= seekpoint_t *  res=can fail   */
-    INPUT_SET_BOOKMARK,    /* arg1= int  res=can fail    */
-
-    /* titles */
-    INPUT_GET_FULL_TITLE_INFO,     /* arg1=input_title_t*** arg2= int * res=can fail */
-
-    /* On the fly input slave */
-    INPUT_ADD_SLAVE,       /* arg1= enum slave_type, arg2= const char *,
-                            * arg3= bool forced, arg4= bool notify,
-                            * arg5= bool check_extension */
-
-    /* ES */
-    INPUT_RESTART_ES_BY_ID,/* arg1=int (-AUDIO/VIDEO/SPU_ES for the whole category) */
-
-    /* Viewpoint */
-    INPUT_UPDATE_VIEWPOINT, /* arg1=(const vlc_viewpoint_t*), arg2=bool b_absolute */
-    INPUT_SET_INITIAL_VIEWPOINT, /* arg1=(const vlc_viewpoint_t*) */
-
-    /* Input ressources
-     * XXX You must release as soon as possible */
-    INPUT_GET_AOUT,         /* arg1=audio_output_t **              res=can fail */
-    INPUT_GET_VOUTS,        /* arg1=vout_thread_t ***, size_t *        res=can fail */
-    INPUT_GET_ES_OBJECTS,   /* arg1=int id, vlc_object_t **dec */
-
-    /* Renderers */
-    INPUT_SET_RENDERER,     /* arg1=vlc_renderer_item_t* */
-
-    /* External clock managments */
-    INPUT_GET_PCR_SYSTEM,   /* arg1=vlc_tick_t *, arg2=vlc_tick_t *       res=can fail */
-    INPUT_MODIFY_PCR_SYSTEM,/* arg1=int absolute, arg2=vlc_tick_t   res=can fail */
-};
-
 /** @}*/
 
 /*****************************************************************************
@@ -631,18 +572,11 @@ VLC_API int input_Read( vlc_object_t *, input_item_t *,
                         input_thread_events_cb, void * );
 #define input_Read(a,b,c,d) input_Read(VLC_OBJECT(a),b,c,d)
 
-VLC_API int input_vaControl( input_thread_t *, int i_query, va_list  );
-
-VLC_API int input_Control( input_thread_t *, int i_query, ...  );
-
 VLC_API void input_Close( input_thread_t * );
 
 VLC_API void input_SetTime( input_thread_t *, vlc_tick_t i_time, bool b_fast );
 
 VLC_API void input_SetPosition( input_thread_t *, float f_position, bool b_fast );
-
-VLC_API void input_LegacyEvents(input_thread_t *, const struct vlc_input_event *, void * );
-VLC_API void input_LegacyVarInit ( input_thread_t * );
 
 /**
  * Get the input item for an input thread
@@ -651,93 +585,6 @@ VLC_API void input_LegacyVarInit ( input_thread_t * );
  * you do not need it anymore.
  */
 VLC_API input_item_t* input_GetItem( input_thread_t * ) VLC_USED;
-
-/**
- * Return one of the video output (if any). If possible, you should use
- * INPUT_GET_VOUTS directly and process _all_ video outputs instead.
- * @param p_input an input thread from which to get a video output
- * @return NULL on error, or a video output thread pointer (which needs to be
- * released with vout_Release()).
- */
-static inline vout_thread_t *input_GetVout( input_thread_t *p_input )
-{
-     vout_thread_t **pp_vout, *p_vout;
-     size_t i_vout;
-
-     if( input_Control( p_input, INPUT_GET_VOUTS, &pp_vout, &i_vout ) )
-         return NULL;
-
-     for( size_t i = 1; i < i_vout; i++ )
-         vout_Release(pp_vout[i]);
-
-     p_vout = (i_vout >= 1) ? pp_vout[0] : NULL;
-     free( pp_vout );
-     return p_vout;
-}
-
-static inline int input_AddSlave( input_thread_t *p_input, enum slave_type type,
-                                  const char *psz_uri, bool b_forced,
-                                  bool b_notify, bool b_check_ext )
-{
-    return input_Control( p_input, INPUT_ADD_SLAVE, type, psz_uri, b_forced,
-                          b_notify, b_check_ext );
-}
-
-/**
- * Update the viewpoint of the input thread. The viewpoint will be applied to
- * all vouts and aouts.
- *
- * @param p_input an input thread
- * @param p_viewpoint the viewpoint value
- * @param b_absolute if true replace the old viewpoint with the new one. If
- * false, increase/decrease it.
- * @return VLC_SUCCESS or a VLC error code
- */
-static inline int input_UpdateViewpoint( input_thread_t *p_input,
-                                         const vlc_viewpoint_t *p_viewpoint,
-                                         bool b_absolute )
-{
-    return input_Control( p_input, INPUT_UPDATE_VIEWPOINT, p_viewpoint,
-                          b_absolute );
-}
-
-/**
- * Return the audio output (if any) associated with an input.
- * @param p_input an input thread
- * @return NULL on error, or the audio output (which needs to be
- * released with aout_Release()).
- */
-static inline audio_output_t *input_GetAout( input_thread_t *p_input )
-{
-     audio_output_t *p_aout;
-     return input_Control( p_input, INPUT_GET_AOUT, &p_aout ) ? NULL : p_aout;
-}
-
-/**
- * Returns the objects associated to an ES.
- *
- * You may set pointer of pointer to NULL to avoid retrieving it.
- */
-static inline int input_GetEsObjects( input_thread_t *p_input, int i_id,
-                                      vlc_object_t **pp_decoder )
-{
-    return input_Control( p_input, INPUT_GET_ES_OBJECTS, i_id, pp_decoder );
-}
-
-/**
- * \see input_clock_GetSystemOrigin
- */
-static inline int input_GetPcrSystem( input_thread_t *p_input, vlc_tick_t *pi_system, vlc_tick_t *pi_delay )
-{
-    return input_Control( p_input, INPUT_GET_PCR_SYSTEM, pi_system, pi_delay );
-}
-/**
- * \see input_clock_ChangeSystemOrigin
- */
-static inline int input_ModifyPcrSystem( input_thread_t *p_input, bool b_absolute, vlc_tick_t i_system )
-{
-    return input_Control( p_input, INPUT_MODIFY_PCR_SYSTEM, b_absolute, i_system );
-}
 
 /* */
 VLC_API decoder_t * input_DecoderCreate( vlc_object_t *, const es_format_t *, input_resource_t * ) VLC_USED;

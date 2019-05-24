@@ -24,6 +24,7 @@
 
 #import <vlc_url.h>
 
+#import "extensions/NSString+Helpers.h"
 #import "main/VLCMain.h"
 #import "os-integration/VLCRemoteControlService.h"
 #import "os-integration/iTunes.h"
@@ -175,9 +176,9 @@ static void cb_player_rate_changed(vlc_player_t *p_player, float newRateValue, v
     });
 }
 
-static void cb_player_capabilities_changed(vlc_player_t *p_player, int newCapabilities, void *p_data)
+static void cb_player_capabilities_changed(vlc_player_t *p_player, int oldCapabilities, int newCapabilities, void *p_data)
 {
-    VLC_UNUSED(p_player);
+    VLC_UNUSED(p_player); VLC_UNUSED(oldCapabilities);
     dispatch_async(dispatch_get_main_queue(), ^{
         VLCPlayerController *playerController = (__bridge VLCPlayerController *)p_data;
         [playerController capabilitiesChanged:newCapabilities];
@@ -425,10 +426,10 @@ static void cb_player_item_meta_changed(vlc_player_t *p_player,
     });
 }
 
-static void cb_player_vout_list_changed(vlc_player_t *p_player,
-                                        enum vlc_player_list_action action,
-                                        vout_thread_t *p_vout,
-                                        void *p_data)
+static void cb_player_vout_changed(vlc_player_t *p_player,
+                                   enum vlc_player_vout_action action,
+                                   vout_thread_t *p_vout,
+                                   void *p_data)
 {
     VLC_UNUSED(p_player);
     VLC_UNUSED(p_vout);
@@ -470,7 +471,7 @@ static const struct vlc_player_cbs player_callbacks = {
     cb_player_item_meta_changed,
     NULL, //cb_player_item_epg_changed,
     NULL, //cb_player_subitems_changed,
-    cb_player_vout_list_changed,
+    cb_player_vout_changed,
     NULL, //on_cork_changed
 };
 
@@ -533,6 +534,10 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
     self = [super init];
     if (self) {
         _defaultNotificationCenter = [NSNotificationCenter defaultCenter];
+        [_defaultNotificationCenter addObserver:self
+                                       selector:@selector(applicationWillTerminate:)
+                                           name:NSApplicationWillTerminateNotification
+                                         object:nil];
         _position = -1.f;
         _time = VLC_TICK_INVALID;
         _p_player = player;
@@ -557,7 +562,7 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
     return self;
 }
 
-- (void)deinitialize
+- (void)applicationWillTerminate:(NSNotification *)aNotification
 {
     [self onPlaybackHasTruelyEnded:nil];
     if (@available(macOS 10.12.2, *)) {
@@ -579,6 +584,11 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
             vlc_player_vout_RemoveListener(_p_player, _playerVoutListenerID);
         }
     }
+}
+
+- (void)dealloc
+{
+    [_defaultNotificationCenter removeObserver:self];
 }
 
 #pragma mark - playback control methods
@@ -1489,6 +1499,8 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
 - (int)setABLoop
 {
     int ret = 0;
+
+    vlc_player_Lock(_p_player);
     switch (_abLoopState) {
         case VLC_PLAYER_ABLOOP_A:
             ret = vlc_player_SetAtoBLoop(_p_player, VLC_PLAYER_ABLOOP_B);
@@ -1502,13 +1514,17 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
             ret = vlc_player_SetAtoBLoop(_p_player, VLC_PLAYER_ABLOOP_A);
             break;
     }
+    vlc_player_Unlock(_p_player);
 
     return ret;
 }
 
 - (int)disableABLoop
 {
-    return vlc_player_SetAtoBLoop(_p_player, VLC_PLAYER_ABLOOP_NONE);
+    vlc_player_Lock(_p_player);
+    int ret = vlc_player_SetAtoBLoop(_p_player, VLC_PLAYER_ABLOOP_NONE);
+    vlc_player_Unlock(_p_player);
+    return ret;
 }
 
 - (void)setEnableRecording:(BOOL)enableRecording
@@ -1613,22 +1629,6 @@ static const struct vlc_player_aout_cbs player_aout_callbacks = {
 - (void)displayOSDMessage:(NSString *)message
 {
     vlc_player_vout_OSDMessage(_p_player, [message UTF8String]);
-}
-
-- (NSString *)videoFilterChainForType:(enum vlc_vout_filter_type)filterType
-{
-    NSString *ret = nil;
-    char *psz_filterChain = vlc_player_vout_GetFilter(_p_player, filterType);
-    if (psz_filterChain != NULL) {
-        ret = [NSString stringWithUTF8String:psz_filterChain];
-        free(psz_filterChain);
-    }
-    return ret;
-}
-
-- (void)setVideoFilterChain:(NSString *)filterChain forType:(enum vlc_vout_filter_type)filterType
-{
-    vlc_player_vout_SetFilter(_p_player, filterType, filterChain != nil ? [filterChain UTF8String] : NULL);
 }
 
 - (void)setAspectRatioIsLocked:(BOOL)b_value

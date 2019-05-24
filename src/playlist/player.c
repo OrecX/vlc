@@ -48,8 +48,19 @@ player_on_current_media_changed(vlc_player_t *player, input_item_t *new_media,
         /* nothing to do */
         return;
 
-    ssize_t index = new_media ? vlc_playlist_IndexOfMedia(playlist, new_media)
-                              : -1;
+    ssize_t index;
+    if (new_media)
+    {
+        index = vlc_playlist_IndexOfMedia(playlist, new_media);
+        if (index != -1)
+        {
+            vlc_playlist_item_t *item = playlist->items.data[index];
+            if (playlist->order == VLC_PLAYLIST_PLAYBACK_ORDER_RANDOM)
+                randomizer_Select(&playlist->randomizer, item);
+        }
+    }
+    else
+        index = -1;
 
     struct vlc_playlist_state state;
     vlc_playlist_state_Save(playlist, &state);
@@ -123,7 +134,8 @@ static const struct vlc_player_cbs player_callbacks = {
 bool
 vlc_playlist_PlayerInit(vlc_playlist_t *playlist, vlc_object_t *parent)
 {
-    playlist->player = vlc_player_New(parent, &player_media_provider, playlist);
+    playlist->player = vlc_player_New(parent, VLC_PLAYER_LOCK_NORMAL,
+                                      &player_media_provider, playlist);
     if (unlikely(!playlist->player))
         return false;
 

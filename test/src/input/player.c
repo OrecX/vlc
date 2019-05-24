@@ -27,6 +27,12 @@
 #include <vlc_player.h>
 #include <vlc_vector.h>
 
+struct report_capabilities
+{
+    int old_caps;
+    int new_caps;
+};
+
 struct report_position
 {
     vlc_tick_t time;
@@ -69,9 +75,9 @@ struct report_signal
     float strength;
 };
 
-struct report_vout_list
+struct report_vout
 {
-    enum vlc_player_list_action action;
+    enum vlc_player_vout_action action;
     vout_thread_t *vout;
 };
 
@@ -87,7 +93,7 @@ struct report_media_subitems
     X(enum vlc_player_error, on_error_changed) \
     X(float, on_buffering_changed) \
     X(float, on_rate_changed) \
-    X(int, on_capabilities_changed) \
+    X(struct report_capabilities, on_capabilities_changed) \
     X(struct report_position, on_position_changed) \
     X(vlc_tick_t, on_length_changed) \
     X(struct report_track_list, on_track_list_changed) \
@@ -102,7 +108,7 @@ struct report_media_subitems
     X(bool, on_recording_changed) \
     X(struct report_signal, on_signal_changed) \
     X(struct input_stats_t, on_statistics_changed) \
-    X(struct report_vout_list, on_vout_list_changed) \
+    X(struct report_vout, on_vout_changed) \
     X(input_item_t *, on_media_meta_changed) \
     X(input_item_t *, on_media_epg_changed) \
     X(struct report_media_subitems, on_media_subitems_changed) \
@@ -162,7 +168,9 @@ struct media_params
 
 struct ctx
 {
+    libvlc_instance_t *vlc;
     vlc_player_t *player;
+    vlc_player_listener_id *listener;
     struct VLC_VECTOR(input_item_t *) next_medias;
     struct VLC_VECTOR(input_item_t *) played_medias;
 
@@ -184,14 +192,6 @@ get_ctx(vlc_player_t *player, void *data)
     struct ctx *ctx = data;
     assert(player == ctx->player);
     return ctx;
-}
-
-static void
-ctx_destroy(struct ctx *ctx)
-{
-#define X(type, name) vlc_vector_destroy(&ctx->report.name);
-REPORT_LIST
-#undef X
 }
 
 static input_item_t *
@@ -261,11 +261,15 @@ player_on_rate_changed(vlc_player_t *player, float new_rate, void *data)
 }
 
 static void
-player_on_capabilities_changed(vlc_player_t *player, int new_caps,
+player_on_capabilities_changed(vlc_player_t *player, int old_caps, int new_caps,
                                void *data)
 {
     struct ctx *ctx = get_ctx(player, data);
-    VEC_PUSH(on_capabilities_changed, new_caps);
+    struct report_capabilities report = {
+        .old_caps = old_caps,
+        .new_caps = new_caps,
+    };
+    VEC_PUSH(on_capabilities_changed, report);
 }
 
 static void
@@ -428,17 +432,17 @@ player_on_statistics_changed(vlc_player_t *player,
 }
 
 static void
-player_on_vout_list_changed(vlc_player_t *player,
-                            enum vlc_player_list_action action,
+player_on_vout_changed(vlc_player_t *player,
+                            enum vlc_player_vout_action action,
                             vout_thread_t *vout, void *data)
 {
     struct ctx *ctx = get_ctx(player, data);
-    struct report_vout_list report = {
+    struct report_vout report = {
         .action = action,
         .vout = vout,
     };
     vout_Hold(vout);
-    VEC_PUSH(on_vout_list_changed, report);
+    VEC_PUSH(on_vout_changed, report);
 }
 
 static void
@@ -564,8 +568,8 @@ ctx_reset(struct ctx *ctx)
     }
 
     {
-        struct report_vout_list report;
-        FOREACH_VEC(report, on_vout_list_changed)
+        struct report_vout report;
+        FOREACH_VEC(report, on_vout_changed)
             vout_Release(report.vout);
     }
 
@@ -731,10 +735,11 @@ test_end_prestop_capabilities(struct ctx *ctx)
     vec_on_capabilities_changed *vec = &ctx->report.on_capabilities_changed;
     while (vec->size == 0)
         vlc_player_CondWait(ctx->player, &ctx->wait);
+    int new_caps = VEC_LAST(vec).new_caps;
     assert(vlc_player_CanSeek(player) == ctx->params.can_seek
-        && !!(VEC_LAST(vec) & VLC_PLAYER_CAP_SEEK) == ctx->params.can_seek);
+        && !!(new_caps & VLC_PLAYER_CAP_SEEK) == ctx->params.can_seek);
     assert(vlc_player_CanPause(player) == ctx->params.can_pause
-        && !!(VEC_LAST(vec) & VLC_PLAYER_CAP_PAUSE) == ctx->params.can_pause);
+        && !!(new_caps & VLC_PLAYER_CAP_PAUSE) == ctx->params.can_pause);
 }
 
 static void
@@ -861,21 +866,21 @@ test_end_poststop_titles(struct ctx *ctx)
 static void
 test_end_poststop_vouts(struct ctx *ctx)
 {
-    vec_on_vout_list_changed *vec = &ctx->report.on_vout_list_changed;
+    vec_on_vout_changed *vec = &ctx->report.on_vout_changed;
 
-    size_t vout_added = 0, vout_removed = 0;
+    size_t vout_started = 0, vout_stopped = 0;
 
-    struct report_vout_list report;
+    struct report_vout report;
     vlc_vector_foreach(report, vec)
     {
-        if (report.action == VLC_PLAYER_LIST_ADDED)
-            vout_added++;
-        else if (report.action == VLC_PLAYER_LIST_REMOVED)
-            vout_removed++;
+        if (report.action == VLC_PLAYER_VOUT_STARTED)
+            vout_started++;
+        else if (report.action == VLC_PLAYER_VOUT_STOPPED)
+            vout_stopped++;
         else
             vlc_assert_unreachable();
     }
-    assert(vout_added == vout_removed);
+    assert(vout_started == vout_stopped);
 }
 
 static void
@@ -1663,7 +1668,8 @@ static void
 test_delete_while_playback(vlc_object_t *obj, bool start)
 {
     test_log("delete_while_playback (start: %d)\n", start);
-    vlc_player_t *player = vlc_player_New(obj, NULL, NULL);
+    vlc_player_t *player = vlc_player_New(obj, VLC_PLAYER_LOCK_NORMAL,
+                                          NULL, NULL);
 
     struct media_params params = DEFAULT_MEDIA_PARAMS(VLC_TICK_FROM_SEC(10));
     input_item_t *media = create_mock_media("media1", &params);
@@ -1685,12 +1691,92 @@ test_delete_while_playback(vlc_object_t *obj, bool start)
     vlc_player_Delete(player);
 }
 
-int
-main(void)
+static void
+test_no_outputs(struct ctx *ctx)
 {
-    test_init();
+    test_log("test_no_outputs\n");
+    vlc_player_t *player = ctx->player;
 
-    static const char * argv[] = {
+    struct media_params params = DEFAULT_MEDIA_PARAMS(VLC_TICK_FROM_MS(10));
+    player_set_current_mock_media(ctx, "media1", &params, false);
+    player_start(ctx);
+
+    wait_state(ctx, VLC_PLAYER_STATE_STOPPING);
+    {
+        vec_on_vout_changed *vec = &ctx->report.on_vout_changed;
+        assert(vec->size == 0);
+    }
+
+    audio_output_t *aout = vlc_player_aout_Hold(player);
+    assert(!aout);
+
+    test_end(ctx);
+}
+
+static void
+test_outputs(struct ctx *ctx)
+{
+    test_log("test_outputs\n");
+    vlc_player_t *player = ctx->player;
+
+    /* Test that the player has a valid aout and vout, even before first
+     * playback */
+    audio_output_t *aout = vlc_player_aout_Hold(player);
+    assert(aout);
+
+    vout_thread_t *vout = vlc_player_vout_Hold(player);
+    assert(vout);
+
+    size_t vout_count;
+    vout_thread_t **vout_list = vlc_player_vout_HoldAll(player, &vout_count);
+    assert(vout_count == 1 && vout_list[0] == vout);
+    vout_Release(vout_list[0]);
+    free(vout_list);
+    vout_Release(vout);
+
+    /* Test that the player keep the same aout and vout during playback */
+    struct media_params params = DEFAULT_MEDIA_PARAMS(VLC_TICK_FROM_MS(10));
+
+    player_set_current_mock_media(ctx, "media1", &params, false);
+    player_start(ctx);
+
+    wait_state(ctx, VLC_PLAYER_STATE_STOPPING);
+
+    {
+        vec_on_vout_changed *vec = &ctx->report.on_vout_changed;
+        assert(vec->size >= 1);
+        assert(vec->data[0].action == VLC_PLAYER_VOUT_STARTED);
+
+        vout_thread_t *same_vout = vlc_player_vout_Hold(player);
+        assert(vec->data[0].vout == same_vout);
+        vout_Release(same_vout);
+    }
+
+    audio_output_t *same_aout = vlc_player_aout_Hold(player);
+    assert(same_aout == aout);
+    aout_Release(same_aout);
+
+    aout_Release(aout);
+    test_end(ctx);
+}
+
+static void
+ctx_destroy(struct ctx *ctx)
+{
+#define X(type, name) vlc_vector_destroy(&ctx->report.name);
+REPORT_LIST
+#undef X
+    vlc_player_RemoveListener(ctx->player, ctx->listener);
+    vlc_player_Unlock(ctx->player);
+    vlc_player_Delete(ctx->player);
+
+    libvlc_release(ctx->vlc);
+}
+
+static void
+ctx_init(struct ctx *ctx, bool use_outputs)
+{
+    const char * argv[] = {
         "-v",
         "--ignore-config",
         "-Idummy",
@@ -1698,8 +1784,8 @@ main(void)
         /* Avoid leaks from various dlopen... */
         "--codec=araw,rawvideo,subsdec,none",
         "--dec-dev=none",
-        "--vout=dummy",
-        "--aout=dummy",
+        use_outputs ? "--vout=dummy" : "--vout=none",
+        use_outputs ? "--aout=dummy" : "--aout=none",
     };
     libvlc_instance_t *vlc = libvlc_new(ARRAY_SIZE(argv), argv);
     assert(vlc);
@@ -1714,7 +1800,8 @@ REPORT_LIST
     };
 #undef X
 
-    struct ctx ctx = {
+    *ctx = (struct ctx) {
+        .vlc = vlc,
         .next_medias = VLC_VECTOR_INITIALIZER,
         .played_medias = VLC_VECTOR_INITIALIZER,
         .program_switch_count = 1,
@@ -1722,7 +1809,7 @@ REPORT_LIST
         .rate = 1.f,
         .wait = VLC_STATIC_COND,
     };
-    reports_init(&ctx.report);
+    reports_init(&ctx->report);
 
     /* Force wdummy window */
     int ret = var_Create(vlc->p_libvlc_int, "window", VLC_VAR_STRING);
@@ -1730,14 +1817,31 @@ REPORT_LIST
     ret = var_SetString(vlc->p_libvlc_int, "window", "wdummy");
     assert(ret == VLC_SUCCESS);
 
-    ctx.player = vlc_player_New(VLC_OBJECT(vlc->p_libvlc_int), &provider, &ctx);
-    vlc_player_t *player = ctx.player;
-    assert(player);
+    ctx->player = vlc_player_New(VLC_OBJECT(vlc->p_libvlc_int),
+                                 VLC_PLAYER_LOCK_NORMAL, &provider, ctx);
+    assert(ctx->player);
 
-    vlc_player_Lock(player);
-    vlc_player_listener_id *listener =
-        vlc_player_AddListener(player, &cbs, &ctx);
-    assert(listener);
+    vlc_player_Lock(ctx->player);
+    ctx->listener = vlc_player_AddListener(ctx->player, &cbs, ctx);
+    assert(ctx->listener);
+}
+
+
+int
+main(void)
+{
+    test_init();
+
+    struct ctx ctx;
+
+    /* Test with --aout=none --vout=none */
+    ctx_init(&ctx, false);
+    test_no_outputs(&ctx);
+    ctx_destroy(&ctx);
+
+    ctx_init(&ctx, true);
+
+    test_outputs(&ctx); /* Must be the first test */
 
     test_set_current_media(&ctx);
     test_next_media(&ctx);
@@ -1753,15 +1857,8 @@ REPORT_LIST
     test_tracks(&ctx, false);
     test_programs(&ctx);
 
-    vlc_player_RemoveListener(player, listener);
-    vlc_player_Unlock(player);
-
-    vlc_player_Delete(player);
-
-    test_delete_while_playback(VLC_OBJECT(vlc->p_libvlc_int), true);
-    test_delete_while_playback(VLC_OBJECT(vlc->p_libvlc_int), false);
-
-    libvlc_release(vlc);
+    test_delete_while_playback(VLC_OBJECT(ctx.vlc->p_libvlc_int), true);
+    test_delete_while_playback(VLC_OBJECT(ctx.vlc->p_libvlc_int), false);
 
     ctx_destroy(&ctx);
     return 0;

@@ -5,15 +5,12 @@
 
 all: install
 
-# bootstrap configuration
-include config.mak
-
-TOPSRC ?= ../../contrib
-TOPDST ?= ..
 SRC := $(TOPSRC)/src
+SRC_BUILT := $(TOPSRC_BUILT)/src
 TARBALLS := $(TOPSRC)/tarballs
+VLC_TOOLS ?= $(TOPSRC)/../extras/tools/build
 
-PATH :=$(abspath ../../extras/tools/build/bin):$(PATH)
+PATH :=$(abspath $(VLC_TOOLS)/bin):$(PATH)
 export PATH
 
 PKGS_ALL := $(patsubst $(SRC)/%/rules.mak,%,$(wildcard $(SRC)/*/rules.mak))
@@ -147,7 +144,7 @@ CCAS=$(CC) -c
 
 ifdef HAVE_IOS
 ifdef HAVE_NEON
-AS=perl $(abspath ../../extras/tools/build/bin/gas-preprocessor.pl) $(CC)
+AS=perl $(abspath $(VLC_TOOLS)/bin/gas-preprocessor.pl) $(CC)
 CCAS=gas-preprocessor.pl $(CC) -c
 endif
 EXTRA_CFLAGS += $(CFLAGS)
@@ -160,9 +157,6 @@ HAVE_MINGW_W64 := 1
 endif
 ifndef HAVE_CROSS_COMPILE
 LN_S = cp -R
-endif
-ifneq ($(findstring clang, $(shell $(CC) --version)),)
-HAVE_CLANG := 1
 endif
 endif
 
@@ -181,6 +175,10 @@ EXTRA_CFLAGS += -DWINSTORECOMPAT
 EXTRA_LDFLAGS += -lwinstorecompat
 endif
 
+ifneq ($(findstring clang, $(shell $(CC) --version)),)
+HAVE_CLANG := 1
+endif
+
 cppcheck = $(shell $(CC) $(CFLAGS) -E -dM - < /dev/null | grep -E $(1))
 
 EXTRA_CFLAGS += -I$(PREFIX)/include
@@ -188,6 +186,11 @@ CPPFLAGS := $(CPPFLAGS) $(EXTRA_CFLAGS)
 CFLAGS := $(CFLAGS) $(EXTRA_CFLAGS) -g
 CXXFLAGS := $(CXXFLAGS) $(EXTRA_CFLAGS) $(EXTRA_CXXFLAGS) -g
 LDFLAGS := $(LDFLAGS) -L$(PREFIX)/lib $(EXTRA_LDFLAGS)
+
+ifdef ENABLE_PDB
+CFLAGS := $(CFLAGS) -gcodeview
+CXXFLAGS := $(CXXFLAGS) -gcodeview
+endif
 
 ifndef WITH_OPTIMIZATION
 CFLAGS := $(CFLAGS) -O0
@@ -214,8 +217,8 @@ HAVE_FPU = 1
 endif
 
 ACLOCAL_AMFLAGS += -I$(PREFIX)/share/aclocal
-ifneq ($(wildcard $(TOPSRC)/../extras/tools/build/share/aclocal/*),)
-ACLOCAL_AMFLAGS += -I$(abspath $(TOPSRC)/../extras/tools/build/share/aclocal)
+ifneq ($(wildcard $(VLC_TOOLS)/share/aclocal/*),)
+ACLOCAL_AMFLAGS += -I$(abspath $(VLC_TOOLS)/share/aclocal)
 endif
 export ACLOCAL_AMFLAGS
 
@@ -346,7 +349,7 @@ download_git = \
 	rm -f "$(@:.xz=)" && \
 	mv -f -- "$@.tmp" "$@"
 check_githash = \
-	h=`sed -n -e "s,^\([0-9a-fA-F]\{40\}\) $<,\1,p" \
+	h=`sed -e "s,^\([0-9a-fA-F]\{40\}\) .*/$(notdir $<),\1,g" \
 		< "$(<:.tar.xz=.githash)"` && \
 	test "$$h" = "$1"
 
@@ -364,7 +367,7 @@ UNPACK = $(RM) -R $@ \
 	$(foreach f,$(filter %.zip,$^), && unzip $(f))
 UNPACK_DIR = $(patsubst %.tar,%,$(basename $(notdir $<)))
 APPLY = (cd $(UNPACK_DIR) && patch -fp1) <
-pkg_static = (cd $(UNPACK_DIR) && ../../../contrib/src/pkg-static.sh $(1))
+pkg_static = (cd $(UNPACK_DIR) && $(SRC_BUILT)/pkg-static.sh $(1))
 MOVE = mv $(UNPACK_DIR) $@ && touch $@
 
 AUTOMAKE_DATA_DIRS=$(foreach n,$(foreach n,$(subst :, ,$(shell echo $$PATH)),$(abspath $(n)/../share)),$(wildcard $(n)/automake*))
@@ -466,12 +469,12 @@ vlc-contrib-$(HOST)-latest.tar.bz2:
 
 prebuilt: vlc-contrib-$(HOST)-latest.tar.bz2
 	-$(UNPACK)
-	$(RM) -r $(TOPDST)/$(HOST)
+	$(RM) -r $(PREFIX)
 	mv $(HOST) $(TOPDST)
-	cd $(TOPDST)/$(HOST) && $(SRC)/change_prefix.sh
+	cd $(PREFIX) && $(SRC)/change_prefix.sh
 ifdef HAVE_WIN32
 ifndef HAVE_CROSS_COMPILE
-	$(RM) `find $(TOPDST)/$(HOST)/bin | file -f- | grep ELF | awk -F: '{print $$1}' | xargs`
+	$(RM) `find $(PREFIX)/bin | file -f- | grep ELF | awk -F: '{print $$1}' | xargs`
 endif
 endif
 

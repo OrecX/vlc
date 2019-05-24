@@ -251,7 +251,8 @@ vlc_player_get_input_locked(vlc_player_t *player)
 static vout_thread_t **
 vlc_player_vout_OSDHoldAll(vlc_player_t *player, size_t *count)
 {
-    vout_thread_t **vouts = vlc_player_vout_HoldAll(player, count);
+    vout_thread_t **vouts;
+    input_resource_HoldVouts(player->resource, &vouts, count);
 
     for (size_t i = 0; i < *count; ++i)
     {
@@ -885,7 +886,7 @@ vlc_player_destructor_Thread(void *data)
             const bool started = player->started;
             vlc_player_Unlock(player);
             if (!started)
-                input_resource_TerminateVout(player->resource);
+                input_resource_StopFreeVout(player->resource);
             if (!keep_sout)
                 input_resource_TerminateSout(player->resource);
             vlc_player_Lock(player);
@@ -1802,8 +1803,8 @@ vlc_player_input_HandleVoutEvent(struct vlc_player_input *input,
     switch (ev->action)
     {
         case VLC_INPUT_EVENT_VOUT_ADDED:
-            vlc_player_SendEvent(player, on_vout_list_changed,
-                                 VLC_PLAYER_LIST_ADDED, ev->vout);
+            vlc_player_SendEvent(player, on_vout_changed,
+                                 VLC_PLAYER_VOUT_STARTED, ev->vout);
 
             /* Register vout callbacks after the vout list event */
             var_AddCallback(ev->vout, "fullscreen",
@@ -1824,8 +1825,8 @@ vlc_player_input_HandleVoutEvent(struct vlc_player_input *input,
                 var_DelCallback(ev->vout, osd_vars[i],
                                 vlc_player_VoutOSDCallback, player);
 
-            vlc_player_SendEvent(player, on_vout_list_changed,
-                                 VLC_PLAYER_LIST_REMOVED, ev->vout);
+            vlc_player_SendEvent(player, on_vout_changed,
+                                 VLC_PLAYER_VOUT_STOPPED, ev->vout);
             break;
         default:
             vlc_assert_unreachable();
@@ -1904,10 +1905,13 @@ input_thread_Events(input_thread_t *input_thread,
             vlc_player_SendEvent(player, on_rate_changed, input->rate);
             break;
         case INPUT_EVENT_CAPABILITIES:
+        {
+            int old_caps = input->capabilities;
             input->capabilities = event->capabilities;
             vlc_player_SendEvent(player, on_capabilities_changed,
-                                 input->capabilities);
+                                 old_caps, input->capabilities);
             break;
+        }
         case INPUT_EVENT_POSITION:
             if (input->time != event->position.ms ||
                 input->position != event->position.percentage)
@@ -2114,7 +2118,7 @@ vlc_player_AddAssociatedMedia(vlc_player_t *player,
 {
     struct vlc_player_input *input = vlc_player_get_input_locked(player);
 
-    if (!input)
+    if (!input || !uri)
         return VLC_EGENERIC;
 
     enum slave_type type;
@@ -2129,7 +2133,33 @@ vlc_player_AddAssociatedMedia(vlc_player_t *player,
         default:
             return VLC_EGENERIC;
     }
-    return input_AddSlave(input->thread, type, uri, select, notify, check_ext);
+
+    if (check_ext && type == SLAVE_TYPE_SPU && !subtitles_Filter(uri))
+        return VLC_EGENERIC;
+
+    input_item_slave_t *slave =
+        input_item_slave_New(uri, type, SLAVE_PRIORITY_USER);
+    if (!slave)
+        return VLC_ENOMEM;
+    slave->b_forced = select;
+
+    vlc_value_t val = { .p_address = slave };
+    input_ControlPushHelper(input->thread, INPUT_CONTROL_ADD_SLAVE, &val);
+    if (notify)
+    {
+        switch( type )
+        {
+            case SLAVE_TYPE_AUDIO:
+                vlc_player_vout_OSDMessage(player, "%s",
+                                           vlc_gettext("Audio track added"));
+                break;
+            case SLAVE_TYPE_SPU:
+                vlc_player_vout_OSDMessage(player, "%s",
+                                vlc_gettext("Subtitle track added"));
+                break;
+        }
+    }
+    return VLC_SUCCESS;
 }
 
 void
@@ -2206,9 +2236,10 @@ vlc_player_Start(vlc_player_t *player)
 
     int ret = vlc_player_input_Start(player->input);
     if (ret == VLC_SUCCESS)
+    {
         player->started = true;
-
-    vlc_player_vout_OSDIcon(player, OSD_PLAY_ICON);
+        vlc_player_vout_OSDIcon(player, OSD_PLAY_ICON);
+    }
     return ret;
 }
 
@@ -2669,8 +2700,15 @@ vlc_player_UpdateViewpoint(vlc_player_t *player,
 {
     struct vlc_player_input *input = vlc_player_get_input_locked(player);
     if (input)
-        input_UpdateViewpoint(input->thread, viewpoint,
-                              whence == VLC_PLAYER_WHENCE_ABSOLUTE);
+    {
+        input_control_param_t param = { .viewpoint = *viewpoint };
+        if (whence == VLC_PLAYER_WHENCE_ABSOLUTE)
+            input_ControlPush(input->thread, INPUT_CONTROL_SET_VIEWPOINT,
+                              &param);
+        else
+            input_ControlPush(input->thread, INPUT_CONTROL_UPDATE_VIEWPOINT,
+                              &param);
+    }
 }
 
 bool
@@ -3039,6 +3077,15 @@ vlc_player_AoutCallback(vlc_object_t *this, const char *var,
             vlc_player_vout_OSDVolume(player, true);
         }
     }
+    else if (strcmp(var, "device") == 0)
+    {
+        const char *old = oldval.psz_string;
+        const char *new = newval.psz_string;
+        /* support NULL values for string comparison */
+        if (old != new && (!old || !new || strcmp(old, new)))
+            vlc_player_aout_SendEvent(player, on_device_changed,
+                                      newval.psz_string);
+    }
     else
         vlc_assert_unreachable();
 
@@ -3122,7 +3169,8 @@ vlc_player_aout_EnableFilter(vlc_player_t *player, const char *name, bool add)
 vout_thread_t *
 vlc_player_vout_Hold(vlc_player_t *player)
 {
-    return input_resource_HoldVout(player->resource);
+    vout_thread_t *vout = input_resource_HoldVout(player->resource);
+    return vout ? vout : input_resource_HoldDummyVout(player->resource);
 }
 
 vout_thread_t **
@@ -3130,6 +3178,16 @@ vlc_player_vout_HoldAll(vlc_player_t *player, size_t *count)
 {
     vout_thread_t **vouts;
     input_resource_HoldVouts(player->resource, &vouts, count);
+
+    if (*count == 0)
+    {
+        vouts = vlc_alloc(1, sizeof(*vouts));
+        if (vouts)
+        {
+            *count = 1;
+            vouts[0] = input_resource_HoldDummyVout(player->resource);
+        }
+    }
     return vouts;
 }
 
@@ -3298,30 +3356,20 @@ static void
 vlc_player_vout_SetVar(vlc_player_t *player, const char *name, int type,
                        vlc_value_t val)
 {
-    var_SetChecked(player, name, type, val);
-
-    size_t count;
-    vout_thread_t **vouts = vlc_player_vout_HoldAll(player, &count);
-    for (size_t i = 0; i < count; i++)
-    {
-        var_SetChecked(vouts[i], name, type, val);
-        vout_Release(vouts[i]);
-    }
-    free(vouts);
+    vout_thread_t *vout = vlc_player_vout_Hold(player);
+    var_SetChecked(vout, name, type, val);
+    vout_Release(vout);
 }
 
 
 static void
 vlc_player_vout_TriggerOption(vlc_player_t *player, const char *option)
 {
-    size_t count;
-    vout_thread_t **vouts = vlc_player_vout_HoldAll(player, &count);
-    for (size_t i = 0; i < count; ++i)
-    {
-        var_TriggerCallback(vouts[i], option);
-        vout_Release(vouts[i]);
-    }
-    free(vouts);
+    /* Don't use vlc_player_vout_Hold() since there is nothing to trigger if it
+     * returns a dummy vout */
+    vout_thread_t *vout = input_resource_HoldVout(player->resource);
+    var_TriggerCallback(vout, option);
+    vout_Release(vout);
 }
 
 vlc_object_t *
@@ -3330,30 +3378,6 @@ vlc_player_GetV4l2Object(vlc_player_t *player)
     struct vlc_player_input *input = vlc_player_get_input_locked(player);
     return input && var_Type(input->thread, "controls") != 0 ?
            (vlc_object_t*) input->thread : NULL;
-}
-
-void
-vlc_player_SetVideoSplitter(vlc_player_t *player, const char *splitter)
-{
-    if (config_GetType("video-splitter") == 0)
-        return;
-    struct vlc_player_input *input = vlc_player_get_input_locked(player);
-    if (!input)
-        return;
-
-    vout_thread_t *vout = vlc_player_vout_Hold(player);
-    var_SetString(vout, "video-splitter", splitter);
-    vout_Release(vout);
-
-    /* FIXME vout cannot handle live video splitter change, restart the main
-     * vout manually by restarting the first video es */
-    struct vlc_player_track *track;
-    vlc_vector_foreach(track, &input->video_track_vector)
-        if (track->selected)
-        {
-            vlc_player_RestartTrack(player, track->es_id);
-            break;
-        }
 }
 
 void
@@ -3378,39 +3402,6 @@ vlc_player_vout_SetWallpaperModeEnabled(vlc_player_t *player, bool enabled)
     vlc_player_vout_SendEvent(player, on_wallpaper_mode_changed, NULL, enabled);
 }
 
-static const char *
-vlc_vout_filter_type_to_varname(enum vlc_vout_filter_type type)
-{
-    switch (type)
-    {
-        case VLC_VOUT_FILTER_VIDEO_FILTER:
-            return "video-filter";
-        case VLC_VOUT_FILTER_SUB_SOURCE:
-            return "sub-source";
-        case VLC_VOUT_FILTER_SUB_FILTER:
-            return "sub-filter";
-        default:
-            vlc_assert_unreachable();
-    }
-}
-
-void
-vlc_player_vout_SetFilter(vlc_player_t *player, enum vlc_vout_filter_type type,
-                          const char *value)
-{
-    const char *varname = vlc_vout_filter_type_to_varname(type);
-    if (varname)
-        vlc_player_vout_SetVar(player, varname, VLC_VAR_STRING,
-                               (vlc_value_t) { .psz_string = (char *) value });
-}
-
-char *
-vlc_player_vout_GetFilter(vlc_player_t *player, enum vlc_vout_filter_type type)
-{
-    const char *varname = vlc_vout_filter_type_to_varname(type);
-    return varname ? var_GetString(player, varname) : NULL;
-}
-
 void
 vlc_player_vout_Snapshot(vlc_player_t *player)
 {
@@ -3418,9 +3409,13 @@ vlc_player_vout_Snapshot(vlc_player_t *player)
 }
 
 static void
-vlc_player_InitLocks(vlc_player_t *player)
+vlc_player_InitLocks(vlc_player_t *player, enum vlc_player_lock_type lock_type)
 {
-    vlc_mutex_init(&player->lock);
+    if (lock_type == VLC_PLAYER_LOCK_REENTRANT)
+        vlc_mutex_init_recursive(&player->lock);
+    else
+        vlc_mutex_init(&player->lock);
+
     vlc_mutex_init(&player->vout_listeners_lock);
     vlc_mutex_init(&player->aout_listeners_lock);
     vlc_cond_init(&player->start_delay_cond);
@@ -3477,7 +3472,7 @@ vlc_player_Delete(vlc_player_t *player)
 }
 
 vlc_player_t *
-vlc_player_New(vlc_object_t *parent,
+vlc_player_New(vlc_object_t *parent, enum vlc_player_lock_type lock_type,
                const struct vlc_player_media_provider *media_provider,
                void *media_provider_data)
 {
@@ -3524,11 +3519,6 @@ vlc_player_New(vlc_object_t *parent,
     VAR_CREATE("demux-filter", VLC_VAR_STRING | VLC_VAR_DOINHERIT);
 
     /* vout variables */
-    if (config_GetType("video-splitter"))
-        VAR_CREATE("video-splitter", VLC_VAR_STRING | VLC_VAR_DOINHERIT);
-    VAR_CREATE("video-filter", VLC_VAR_STRING | VLC_VAR_DOINHERIT);
-    VAR_CREATE("sub-source", VLC_VAR_STRING | VLC_VAR_DOINHERIT);
-    VAR_CREATE("sub-filter", VLC_VAR_STRING | VLC_VAR_DOINHERIT);
     VAR_CREATE("fullscreen", VLC_VAR_BOOL | VLC_VAR_DOINHERIT);
     VAR_CREATE("video-on-top", VLC_VAR_BOOL | VLC_VAR_DOINHERIT);
     VAR_CREATE("video-wallpaper", VLC_VAR_BOOL | VLC_VAR_DOINHERIT);
@@ -3565,12 +3555,13 @@ vlc_player_New(vlc_object_t *parent,
     {
         var_AddCallback(aout, "volume", vlc_player_AoutCallback, player);
         var_AddCallback(aout, "mute", vlc_player_AoutCallback, player);
+        var_AddCallback(aout, "device", vlc_player_AoutCallback, player);
         var_AddCallback(player, "corks", vlc_player_CorkCallback, NULL);
         input_resource_PutAout(player->resource, aout);
     }
 
     player->deleting = false;
-    vlc_player_InitLocks(player);
+    vlc_player_InitLocks(player, lock_type);
 
     if (vlc_clone(&player->destructor.thread, vlc_player_destructor_Thread,
                   player, VLC_THREAD_PRIORITY_LOW) != 0)
@@ -3586,6 +3577,7 @@ error:
     {
         var_DelCallback(aout, "volume", vlc_player_AoutCallback, player);
         var_DelCallback(aout, "mute", vlc_player_AoutCallback, player);
+        var_DelCallback(aout, "device", vlc_player_AoutCallback, player);
         var_DelCallback(player, "corks", vlc_player_AoutCallback, NULL);
     }
     if (player->resource)

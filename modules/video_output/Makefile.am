@@ -15,7 +15,15 @@ OPENGL_COMMONCFLAGS = $(LIBPLACEBO_CFLAGS)
 OPENGL_COMMONLIBS = $(LIBPLACEBO_LIBS)
 
 if HAVE_DECKLINK
-libdecklinkoutput_plugin_la_SOURCES = video_output/decklink.cpp
+libdecklinkoutput_plugin_la_SOURCES = video_output/decklink.cpp \
+                                      stream_out/sdi/Ancillary.cpp \
+                                      stream_out/sdi/Ancillary.hpp \
+                                      stream_out/sdi/DBMHelper.cpp \
+                                      stream_out/sdi/DBMHelper.hpp \
+                                      stream_out/sdi/SDIGenerator.cpp \
+                                      stream_out/sdi/SDIGenerator.hpp \
+                                      stream_out/sdi/V210.cpp \
+                                      stream_out/sdi/V210.hpp
 libdecklinkoutput_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) $(CPPFLAGS_decklinkoutput)
 libdecklinkoutput_plugin_la_LIBADD = $(LIBS_decklink) $(LIBDL) -lpthread
 vout_LTLIBRARIES += libdecklinkoutput_plugin.la

@@ -58,6 +58,7 @@ struct input_resource_t
 
     sout_instance_t *p_sout;
     vout_thread_t   *p_vout_free;
+    vout_thread_t   *p_vout_dummy;
 
     /* This lock is used to protect vout resources access (for hold)
      * It is a special case because of embed video (possible deadlock
@@ -142,10 +143,17 @@ static sout_instance_t *RequestSout( input_resource_t *p_resource,
 /* */
 static void DestroyVout( input_resource_t *p_resource )
 {
-    assert( p_resource->i_vout == 0 );
+    assert( p_resource->i_vout == 0 || p_resource->p_vout_free == p_resource->pp_vout[0] );
 
     if( p_resource->p_vout_free )
+    {
+        vlc_mutex_lock(&p_resource->lock_hold);
+        TAB_REMOVE(p_resource->i_vout, p_resource->pp_vout, p_resource->p_vout_free);
+        vlc_mutex_unlock(&p_resource->lock_hold);
+
         vout_Close( p_resource->p_vout_free );
+        p_resource->p_vout_free = NULL;
+    }
 
     p_resource->p_vout_free = NULL;
 }
@@ -192,50 +200,6 @@ static void DisplayVoutTitle( input_resource_t *p_resource,
         free( psz_artist );
     }
     free( psz_nowplaying );
-}
-
-static vout_thread_t *HoldVout( input_resource_t *p_resource )
-{
-    /* TODO FIXME: p_resource->pp_vout order is NOT stable */
-    vlc_mutex_lock( &p_resource->lock_hold );
-
-    vout_thread_t *p_vout = p_resource->i_vout > 0 ? p_resource->pp_vout[0] : NULL;
-    if( p_vout )
-        vout_Hold(p_vout);
-
-    vlc_mutex_unlock( &p_resource->lock_hold );
-
-    return p_vout;
-}
-
-static void HoldVouts( input_resource_t *p_resource, vout_thread_t ***ppp_vout,
-                       size_t *pi_vout )
-{
-    vout_thread_t **pp_vout;
-
-    *pi_vout = 0;
-    *ppp_vout = NULL;
-
-    vlc_mutex_lock( &p_resource->lock_hold );
-
-    if( p_resource->i_vout <= 0 )
-        goto exit;
-
-    pp_vout = vlc_alloc( p_resource->i_vout, sizeof(*pp_vout) );
-    if( !pp_vout )
-        goto exit;
-
-    *ppp_vout = pp_vout;
-    *pi_vout = p_resource->i_vout;
-
-    for( int i = 0; i < p_resource->i_vout; i++ )
-    {
-        pp_vout[i] = p_resource->pp_vout[i];
-        vout_Hold(pp_vout[i]);
-    }
-
-exit:
-    vlc_mutex_unlock( &p_resource->lock_hold );
 }
 
 /* Audio output */
@@ -328,6 +292,13 @@ input_resource_t *input_resource_New( vlc_object_t *p_parent )
     if( !p_resource )
         return NULL;
 
+    p_resource->p_vout_dummy = vout_CreateDummy(p_parent);
+    if( !p_resource->p_vout_dummy )
+    {
+        free( p_resource );
+        return NULL;
+    }
+
     vlc_atomic_rc_init( &p_resource->rc );
     p_resource->p_parent = p_parent;
     vlc_mutex_init( &p_resource->lock );
@@ -347,6 +318,7 @@ void input_resource_Release( input_resource_t *p_resource )
 
     vlc_mutex_destroy( &p_resource->lock_hold );
     vlc_mutex_destroy( &p_resource->lock );
+    vout_Release( p_resource->p_vout_dummy );
     free( p_resource );
 }
 
@@ -361,11 +333,53 @@ void input_resource_SetInput( input_resource_t *p_resource, input_thread_t *p_in
     vlc_mutex_lock( &p_resource->lock );
 
     if( p_resource->p_input && !p_input )
-        assert( p_resource->i_vout == 0 );
+        assert( p_resource->i_vout == 0 || p_resource->p_vout_free == p_resource->pp_vout[0] );
 
     /* */
     p_resource->p_input = p_input;
 
+    vlc_mutex_unlock( &p_resource->lock );
+}
+
+static void input_resource_PutVoutLocked(input_resource_t *p_resource,
+                                         vout_thread_t *vout, bool started)
+{
+    assert(vout != NULL);
+    vlc_mutex_lock(&p_resource->lock_hold);
+    assert( p_resource->i_vout > 0 );
+
+    if (p_resource->pp_vout[0] == vout)
+    {
+        vlc_mutex_unlock(&p_resource->lock_hold);
+
+        assert(p_resource->p_vout_free == NULL);
+        msg_Dbg(p_resource->p_parent, "saving a free vout");
+        p_resource->p_vout_free = vout;
+        if (started)
+            vout_StopDisplay(vout);
+    }
+    else
+    {
+        msg_Dbg(p_resource->p_parent, "destroying vout (already one saved or active)");
+#ifndef NDEBUG
+        {
+            int index;
+            TAB_FIND(p_resource->i_vout, p_resource->pp_vout, vout, index);
+            assert(index >= 0);
+        }
+#endif
+
+        TAB_REMOVE(p_resource->i_vout, p_resource->pp_vout, vout);
+        vlc_mutex_unlock(&p_resource->lock_hold);
+        vout_Close(vout);
+    }
+}
+
+void input_resource_PutVout(input_resource_t *p_resource,
+                                   vout_thread_t *vout)
+{
+    vlc_mutex_lock( &p_resource->lock );
+    input_resource_PutVoutLocked( p_resource, vout, true );
     vlc_mutex_unlock( &p_resource->lock );
 }
 
@@ -386,22 +400,34 @@ vout_thread_t *input_resource_GetVout(input_resource_t *p_resource,
         cfg = &cfg_buf;
 
         if (cfg_buf.vout == NULL) {
-            cfg_buf.vout = vout = vout_Create(p_resource->p_parent);
+            /* Use the dummy vout as the parent of the future main vout. This
+             * will allow the future vout to inherit all parameters
+             * pre-configured on this dummy vout. */
+            vlc_object_t *parent = p_resource->i_vout == 0 ?
+                VLC_OBJECT(p_resource->p_vout_dummy) : p_resource->p_parent;
+            cfg_buf.vout = vout = vout_Create(parent);
             if (vout == NULL)
                 goto out;
+
+            vlc_mutex_lock(&p_resource->lock_hold);
+            TAB_APPEND(p_resource->i_vout, p_resource->pp_vout, vout);
+            vlc_mutex_unlock(&p_resource->lock_hold);
         } else
             msg_Dbg(p_resource->p_parent, "trying to reuse free vout");
-    }  else if (cfg->vout != NULL) {
-        assert(cfg->vout != p_resource->p_vout_free);
-
-        vlc_mutex_lock(&p_resource->lock_hold);
-        TAB_REMOVE(p_resource->i_vout, p_resource->pp_vout, cfg->vout);
-        vlc_mutex_unlock(&p_resource->lock_hold);
     }
 
+#ifndef NDEBUG
+    {
+        int index;
+        TAB_FIND(p_resource->i_vout, p_resource->pp_vout, cfg->vout, index );
+        assert(index >= 0);
+        assert(p_resource->p_vout_free == NULL);
+    }
+#endif
+
     if (vout_Request(cfg, p_resource->p_input)) {
+        input_resource_PutVoutLocked(p_resource, cfg->vout, false);
         vlc_mutex_unlock(&p_resource->lock);
-        input_resource_PutVout(p_resource, cfg->vout);
         return NULL;
     }
 
@@ -410,49 +436,63 @@ vout_thread_t *input_resource_GetVout(input_resource_t *p_resource,
 
     /* Send original viewpoint to the input in order to update other ESes */
     if (p_resource->p_input != NULL)
-        input_Control(p_resource->p_input, INPUT_SET_INITIAL_VIEWPOINT,
-                      &cfg->fmt->pose);
-
-    vlc_mutex_lock(&p_resource->lock_hold);
-    TAB_APPEND(p_resource->i_vout, p_resource->pp_vout, vout);
-    vlc_mutex_unlock(&p_resource->lock_hold);
+    {
+        input_control_param_t param = { .viewpoint = cfg->fmt->pose };
+        input_ControlPush(p_resource->p_input, INPUT_CONTROL_SET_INITIAL_VIEWPOINT,
+                          &param);
+    }
 
 out:
     vlc_mutex_unlock( &p_resource->lock );
     return vout;
 }
 
-void input_resource_PutVout(input_resource_t *p_resource,
-                            vout_thread_t *vout)
-{
-    assert(vout != NULL);
-    vlc_mutex_lock( &p_resource->lock );
-
-    vlc_mutex_lock(&p_resource->lock_hold);
-    TAB_REMOVE(p_resource->i_vout, p_resource->pp_vout, vout);
-
-    const int active_vouts = p_resource->i_vout;
-    vlc_mutex_unlock(&p_resource->lock_hold);
-
-    if (p_resource->p_vout_free != NULL || active_vouts > 0) {
-        msg_Dbg(p_resource->p_parent, "destroying vout (already one saved or active)");
-        vout_Close(vout);
-    } else {
-        msg_Dbg(p_resource->p_parent, "saving a free vout");
-        p_resource->p_vout_free = vout;
-    }
-    vlc_mutex_unlock( &p_resource->lock );
-}
-
 vout_thread_t *input_resource_HoldVout( input_resource_t *p_resource )
 {
-    return HoldVout( p_resource );
+    vlc_mutex_lock( &p_resource->lock_hold );
+
+    vout_thread_t *p_vout = p_resource->i_vout > 0 ? p_resource->pp_vout[0] : NULL;
+    if( p_vout )
+        vout_Hold(p_vout);
+
+    vlc_mutex_unlock( &p_resource->lock_hold );
+
+    return p_vout;
+}
+
+vout_thread_t *input_resource_HoldDummyVout( input_resource_t *p_resource )
+{
+    return vout_Hold(p_resource->p_vout_dummy);
 }
 
 void input_resource_HoldVouts( input_resource_t *p_resource, vout_thread_t ***ppp_vout,
                                size_t *pi_vout )
 {
-    HoldVouts( p_resource, ppp_vout, pi_vout );
+    vout_thread_t **pp_vout;
+
+    *pi_vout = 0;
+    *ppp_vout = NULL;
+
+    vlc_mutex_lock( &p_resource->lock_hold );
+
+    if( p_resource->i_vout <= 0 )
+        goto exit;
+
+    pp_vout = vlc_alloc( p_resource->i_vout, sizeof(*pp_vout) );
+    if( !pp_vout )
+        goto exit;
+
+    *ppp_vout = pp_vout;
+    *pi_vout = p_resource->i_vout;
+
+    for( int i = 0; i < p_resource->i_vout; i++ )
+    {
+        pp_vout[i] = p_resource->pp_vout[i];
+        vout_Hold(pp_vout[i]);
+    }
+
+exit:
+    vlc_mutex_unlock( &p_resource->lock_hold );
 }
 
 void input_resource_TerminateVout( input_resource_t *p_resource )
@@ -461,20 +501,20 @@ void input_resource_TerminateVout( input_resource_t *p_resource )
     if (p_resource->p_vout_free != NULL)
     {
         msg_Dbg(p_resource->p_vout_free, "destroying useless vout");
-        vout_Close(p_resource->p_vout_free);
-        p_resource->p_vout_free = NULL;
+        DestroyVout(p_resource);
     }
     vlc_mutex_unlock(&p_resource->lock);
 }
 
-bool input_resource_HasVout( input_resource_t *p_resource )
+void input_resource_StopFreeVout(input_resource_t *p_resource)
 {
-    vlc_mutex_lock( &p_resource->lock );
-    assert( !p_resource->p_input );
-    const bool b_vout = p_resource->p_vout_free != NULL;
-    vlc_mutex_unlock( &p_resource->lock );
-
-    return b_vout;
+    vlc_mutex_lock(&p_resource->lock);
+    if (p_resource->p_vout_free != NULL)
+    {
+        msg_Dbg(p_resource->p_vout_free, "stop free vout");
+        vout_Stop(p_resource->p_vout_free);
+    }
+    vlc_mutex_unlock(&p_resource->lock);
 }
 
 /* */

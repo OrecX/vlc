@@ -407,7 +407,7 @@ static int Open( vlc_object_t *p_this )
 
     p_sys->patfix.i_first_dts = -1;
     p_sys->patfix.i_timesourcepid = 0;
-    p_sys->patfix.status = var_GetBool( p_demux, "ts-patfix" ) ? PAT_WAITING : PAT_FIXTRIED;
+    p_sys->patfix.status = var_CreateGetBool( p_demux, "ts-patfix" ) ? PAT_WAITING : PAT_FIXTRIED;
 
     /* Init PAT handler */
     patpid = GetPID(p_sys, 0);
@@ -436,7 +436,7 @@ static int Open( vlc_object_t *p_this )
     p_sys->i_next_extraid = 1;
 
     p_sys->b_trust_pcr = var_CreateGetBool( p_demux, "ts-trust-pcr" );
-    p_sys->b_check_pcr_offset = p_sys->b_trust_pcr && var_GetBool(p_demux, "ts-pcr-offsetfix" );
+    p_sys->b_check_pcr_offset = p_sys->b_trust_pcr && var_CreateGetBool(p_demux, "ts-pcr-offsetfix" );
 
     /* We handle description of an extra PMT */
     char* psz_string = var_CreateGetString( p_demux, "ts-extra-pmt" );
@@ -526,7 +526,7 @@ static int Open( vlc_object_t *p_this )
     vlc_stream_Control( p_sys->stream, STREAM_CAN_FASTSEEK,
                         &p_sys->b_canfastseek );
 
-    if( !p_sys->b_access_control && var_GetBool( p_demux, "ts-pmtfix-waitdata" ) )
+    if( !p_sys->b_access_control && var_CreateGetBool( p_demux, "ts-pmtfix-waitdata" ) )
         p_sys->es_creation = DELAY_ES;
     else
         p_sys->es_creation = CREATE_ES;
@@ -2006,7 +2006,8 @@ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, stime_t i_scaled
     if( !b_found )
     {
         msg_Dbg( p_demux, "Seek():cannot find a time position." );
-        vlc_stream_Seek( p_sys->stream, i_initial_pos );
+        if( vlc_stream_Seek( p_sys->stream, i_initial_pos ) != VLC_SUCCESS )
+            msg_Err( p_demux, "Can't seek back to %" PRIu64, i_initial_pos );
         return VLC_EGENERIC;
     }
     return VLC_SUCCESS;

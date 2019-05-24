@@ -25,6 +25,7 @@
 #import <vlc_interface.h>
 #import <vlc_player.h>
 
+#import "extensions/NSString+Helpers.h"
 #import "main/VLCMain.h"
 #import "playlist/VLCPlaylistModel.h"
 #import "playlist/VLCPlaylistItem.h"
@@ -201,6 +202,10 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
     self = [super init];
     if (self) {
         _defaultNotificationCenter = [NSNotificationCenter defaultCenter];
+        [_defaultNotificationCenter addObserver:self
+                                       selector:@selector(applicationWillTerminate:)
+                                           name:NSApplicationWillTerminateNotification
+                                         object:nil];
         _p_playlist = playlist;
 
         /* set initial values, further updates through callbacks */
@@ -219,12 +224,8 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
     return self;
 }
 
-- (void)deinitialize
+- (void)applicationWillTerminate:(NSNotification *)aNotification
 {
-    if (_playerController) {
-        [_playerController deinitialize];
-    }
-
     if (_p_playlist) {
         if (_playlistListenerID) {
             vlc_playlist_Lock(_p_playlist);
@@ -234,10 +235,18 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
     }
 }
 
+- (void)dealloc
+{
+    [_defaultNotificationCenter removeObserver:self];
+}
+
 #pragma mark - callback forwarders
 
 - (void)playlistResetWithItems:(NSArray *)items
 {
+    // Clear all items (reset)
+    [_playlistModel dropExistingData];
+
     [_playlistModel addItems:items];
 
     [_playlistDataSource playlistUpdated];
@@ -361,6 +370,29 @@ static const struct vlc_playlist_callbacks playlist_callbacks = {
             insertionIndex++;
         }
     }
+}
+
+- (int)addInputItem:(input_item_t *)p_inputItem atPosition:(size_t)insertionIndex startPlayback:(BOOL)startPlayback
+{
+    if (p_inputItem == NULL) {
+        return VLC_EBADVAR;
+    }
+    int ret = 0;
+
+    vlc_playlist_Lock(_p_playlist);
+    if (insertionIndex == -1) {
+        insertionIndex = vlc_playlist_Count(_p_playlist);
+    }
+    ret = vlc_playlist_InsertOne(_p_playlist, insertionIndex, p_inputItem);
+    if (ret != VLC_SUCCESS) {
+        vlc_playlist_Unlock(_p_playlist);
+        return ret;
+    }
+    if (startPlayback) {
+        ret = vlc_playlist_PlayAt(_p_playlist, insertionIndex);
+    }
+    vlc_playlist_Unlock(_p_playlist);
+    return ret;
 }
 
 - (void)removeItemAtIndex:(size_t)index

@@ -33,8 +33,27 @@ NS_ASSUME_NONNULL_BEGIN
 @interface VLCLibraryWindow : VLCVideoWindowCommon
 
 @property (readwrite, weak) IBOutlet NSSegmentedControl *segmentedTitleControl;
-@property (readwrite, weak) IBOutlet NSCollectionView *libraryCollectionView;
+@property (readwrite, weak) IBOutlet NSSplitView *mainSplitView;
+@property (readwrite, weak) IBOutlet NSStackView *videoLibraryStackView;
+@property (readwrite, weak) IBOutlet NSCollectionView *videoLibraryCollectionView;
+@property (readwrite, weak) IBOutlet NSCollectionView *recentVideoLibraryCollectionView;
+@property (readwrite, weak) IBOutlet NSCollectionView *mediaSourceCollectionView;
+@property (readwrite, weak) IBOutlet NSSplitView *audioLibrarySplitView;
+@property (readwrite, weak) IBOutlet NSTableView *audioCategorySelectionTableView;
+@property (readwrite, weak) IBOutlet NSTableView *audioCollectionSelectionTableView;
+@property (readwrite, weak) IBOutlet NSTableView *audioGroupSelectionTableView;
+@property (readwrite, weak) IBOutlet NSScrollView *mediaSourceScrollView;
+@property (readwrite, weak) IBOutlet NSView *libraryTargetView;
 @property (readwrite, weak) IBOutlet NSTableView *playlistTableView;
+@property (readwrite, weak) IBOutlet NSTextField *upNextLabel;
+@property (readwrite, weak) IBOutlet NSBox *upNextSeparator;
+@property (readwrite, weak) IBOutlet NSButton *clearPlaylistButton;
+@property (readwrite, weak) IBOutlet NSBox *clearPlaylistSeparator;
+@property (readwrite, weak) IBOutlet NSButton *repeatPlaylistButton;
+@property (readwrite, weak) IBOutlet NSButton *shufflePlaylistButton;
+@property (readwrite, weak) IBOutlet NSView *alternativeAudioView;
+@property (readwrite, weak) IBOutlet NSCollectionView *alternativeAudioCollectionView;
+@property (readwrite, weak) IBOutlet NSSegmentedControl *alternativeAudioSegmentedControl;
 
 @property (readonly) BOOL nativeFullscreenMode;
 @property (readwrite) BOOL nonembedded;
@@ -44,10 +63,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)disableVideoPlaybackAppearance;
 
 - (IBAction)playlistDoubleClickAction:(id)sender;
-
-@end
-
-@interface VLCLibraryDataSource : NSObject <NSCollectionViewDataSource, NSCollectionViewDelegate>
+- (IBAction)shuffleAction:(id)sender;
+- (IBAction)repeatAction:(id)sender;
+- (IBAction)clearPlaylist:(id)sender;
 
 @end
 

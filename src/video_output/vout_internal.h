@@ -64,6 +64,8 @@ enum vout_crop_mode {
 /* */
 struct vout_thread_sys_t
 {
+    bool dummy;
+
     /* Splitter module if used */
     char            *splitter_name;
 
@@ -174,7 +176,6 @@ struct vout_thread_sys_t
     vlc_mutex_t     window_lock;
 
     /* Video output display */
-    vlc_mutex_t     display_lock;
     vout_display_cfg_t display_cfg;
     vout_display_t *display;
 
@@ -191,6 +192,8 @@ struct vout_thread_sys_t
  * Creates a video output.
  */
 vout_thread_t *vout_Create(vlc_object_t *obj) VLC_USED;
+
+vout_thread_t *vout_CreateDummy(vlc_object_t *obj) VLC_USED;
 
 /**
  * Returns a suitable vout or release the given one.
@@ -214,6 +217,11 @@ int vout_Request(const vout_configuration_t *cfg, input_thread_t *input);
  * This disables a vout, but keeps it for later reuse.
  */
 void vout_Stop(vout_thread_t *);
+
+/**
+ * Stop the display plugin, but keep its window plugin for later reuse.
+ */
+void vout_StopDisplay(vout_thread_t *);
 
 /**
  * Destroys a vout.
@@ -242,6 +250,7 @@ void vout_ChangeSubMargin(vout_thread_t *, int);
 void vout_ChangeViewpoint( vout_thread_t *, const vlc_viewpoint_t *);
 
 /* */
+void vout_CreateVars( vout_thread_t * );
 void vout_IntfInit( vout_thread_t * );
 void vout_IntfReinit( vout_thread_t * );
 void vout_IntfDeinit(vlc_object_t *);
@@ -253,7 +262,6 @@ void vout_CloseWrapper(vout_thread_t *);
 
 /* */
 void vout_SetSubpictureClock(vout_thread_t *vout, vlc_clock_t *clock);
-int spu_ProcessMouse(spu_t *, const vlc_mouse_t *, const video_format_t *);
 void spu_Attach( spu_t *, input_thread_t *input );
 void spu_Detach( spu_t * );
 void spu_clock_Set(spu_t *, vlc_clock_t *);

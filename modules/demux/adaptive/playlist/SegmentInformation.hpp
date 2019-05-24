@@ -22,6 +22,7 @@
 
 #include "ICanonicalUrl.hpp"
 #include "../tools/Properties.hpp"
+#include "../encryption/CommonEncryption.hpp"
 #include "SegmentInfoCommon.h"
 #include <vlc_common.h>
 #include <vector>
@@ -37,6 +38,13 @@ namespace adaptive
         class AbstractPlaylist;
         class ISegment;
 
+        enum Tribool
+        {
+            TRIBOOL_UNKNOWN,
+            TRIBOOL_FALSE,
+            TRIBOOL_TRUE,
+        };
+
         /* common segment elements for period/adaptset/rep 5.3.9.1,
          * with properties inheritance */
         class SegmentInformation : public ICanonicalUrl,
@@ -48,14 +56,7 @@ namespace adaptive
                 SegmentInformation( SegmentInformation * = 0 );
                 explicit SegmentInformation( AbstractPlaylist * );
                 virtual ~SegmentInformation();
-                typedef enum SwitchPolicy
-                {
-                    SWITCH_UNKNOWN,
-                    SWITCH_UNAVAILABLE,
-                    SWITCH_SEGMENT_ALIGNED,
-                    SWITCH_BITSWITCHEABLE
-                } SwitchPolicy;
-                SwitchPolicy getSwitchPolicy() const;
+
                 virtual vlc_tick_t getPeriodStart() const;
                 virtual AbstractPlaylist *getPlaylist() const;
 
@@ -86,6 +87,8 @@ namespace adaptive
                 virtual void pruneBySegmentNumber(uint64_t);
                 virtual void pruneByPlaybackTime(vlc_tick_t);
                 virtual uint64_t translateSegmentNumber(uint64_t, const SegmentInformation *) const;
+                void setEncryption(const CommonEncryption &);
+                const CommonEncryption & intheritEncryption() const;
 
             protected:
                 std::size_t getAllSegments(std::vector<ISegment *> &) const;
@@ -93,13 +96,11 @@ namespace adaptive
                 std::vector<SegmentInformation *> childs;
                 SegmentInformation * getChildByID( const ID & );
                 SegmentInformation *parent;
-                SwitchPolicy switchpolicy;
 
             public:
                 void appendSegmentList(SegmentList *, bool = false);
                 void setSegmentBase(SegmentBase *);
                 void setSegmentTemplate(MediaSegmentTemplate *);
-                void setSwitchPolicy(SwitchPolicy);
                 virtual Url getUrlSegment() const; /* impl */
                 Property<Url *> baseUrl;
 
@@ -112,6 +113,7 @@ namespace adaptive
                 SegmentBase     *segmentBase;
                 SegmentList     *segmentList;
                 MediaSegmentTemplate *mediaSegmentTemplate;
+                CommonEncryption commonEncryption;
         };
     }
 }

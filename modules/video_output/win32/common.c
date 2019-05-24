@@ -44,20 +44,12 @@
 #include "common.h"
 #include "../video_chroma/copy.h"
 
-static bool GetExternalDimensions(void *opaque, UINT *width, UINT *height)
-{
-    const vout_display_t *vd = opaque;
-    *width  = vd->source.i_visible_width;
-    *height = vd->source.i_visible_height;
-    return true;
-}
-
-void InitArea(vout_display_t *vd, display_win32_area_t *area, const vout_display_cfg_t *vdcfg)
+void CommonInit(vout_display_t *vd, display_win32_area_t *area, const vout_display_cfg_t *vdcfg)
 {
     area->place_changed = false;
-    area->pf_GetDisplayDimensions = GetExternalDimensions;
-    area->opaque_dimensions = vd;
     area->vdcfg = *vdcfg;
+
+    area->texture_source = vd->source;
 
     var_Create(vd, "disable-screensaver", VLC_VAR_BOOL | VLC_VAR_DOINHERIT);
 }
@@ -65,37 +57,19 @@ void InitArea(vout_display_t *vd, display_win32_area_t *area, const vout_display
 #if !VLC_WINSTORE_APP
 static void CommonChangeThumbnailClip(vlc_object_t *, vout_display_sys_win32_t *, bool show);
 
-static bool GetWindowDimensions(void *opaque, UINT *width, UINT *height)
-{
-    const vout_display_sys_win32_t *sys = opaque;
-    assert(sys != NULL);
-    RECT out;
-    if (!GetClientRect(sys->hwnd, &out))
-        return false;
-    *width  = RECTWidth(out);
-    *height = RECTHeight(out);
-    return true;
-}
-
 /* */
-int CommonInit(vlc_object_t *obj, display_win32_area_t *area,
-               vout_display_sys_win32_t *sys, bool projection_gestures)
+int CommonWindowInit(vlc_object_t *obj, display_win32_area_t *area,
+                     vout_display_sys_win32_t *sys, bool projection_gestures)
 {
     if (unlikely(area->vdcfg.window == NULL))
         return VLC_EGENERIC;
-
-    area->pf_GetDisplayDimensions = GetWindowDimensions;
-    area->opaque_dimensions = sys;
 
     /* */
 #if !defined(NDEBUG) && defined(HAVE_DXGIDEBUG_H)
     sys->dxgidebug_dll = LoadLibrary(TEXT("DXGIDEBUG.DLL"));
 #endif
-    sys->hwnd      = NULL;
     sys->hvideownd = NULL;
     sys->hparent   = NULL;
-    sys->is_first_placement = true;
-    sys->is_on_top        = false;
 
     /* */
     sys->event = EventThreadCreate(obj, area->vdcfg.window);
@@ -114,8 +88,9 @@ int CommonInit(vlc_object_t *obj, display_win32_area_t *area,
         return VLC_EGENERIC;
 
     sys->hparent       = hwnd.hparent;
-    sys->hwnd          = hwnd.hwnd;
     sys->hvideownd     = hwnd.hvideownd;
+
+    CommonPlacePicture(obj, area, sys);
 
     return VLC_SUCCESS;
 }
@@ -128,23 +103,10 @@ int CommonInit(vlc_object_t *obj, display_win32_area_t *area,
 * its job is to update the source and destination RECTs used to display the
 * picture.
 *****************************************************************************/
-void UpdateRects(vout_display_t *vd, display_win32_area_t *area, vout_display_sys_win32_t *sys)
+void CommonPlacePicture(vlc_object_t *obj, display_win32_area_t *area, vout_display_sys_win32_t *sys)
 {
-    const video_format_t *source = &vd->source;
-
-    UINT  display_width, display_height;
-
-    /* Retrieve the window size */
-    if (!area->pf_GetDisplayDimensions(area->opaque_dimensions, &display_width, &display_height))
-    {
-        msg_Err(vd, "could not get the window dimensions");
-        return;
-    }
-
     /* Update the window position and size */
     vout_display_cfg_t place_cfg = area->vdcfg;
-    place_cfg.display.width = display_width;
-    place_cfg.display.height = display_height;
 
 #if (defined(MODULE_NAME_IS_glwin32))
     /* Reverse vertical alignment as the GL tex are Y inverted */
@@ -155,7 +117,7 @@ void UpdateRects(vout_display_t *vd, display_win32_area_t *area, vout_display_sy
 #endif
 
     vout_display_place_t before_place = area->place;
-    vout_display_PlacePicture(&area->place, source, &place_cfg);
+    vout_display_PlacePicture(&area->place, &area->texture_source, &place_cfg);
 
     /* Signal the change in size/position */
     if (!vout_display_PlaceEquals(&before_place, &area->place))
@@ -163,34 +125,18 @@ void UpdateRects(vout_display_t *vd, display_win32_area_t *area, vout_display_sy
         area->place_changed |= true;
 
 #ifndef NDEBUG
-        msg_Dbg(vd, "DirectXUpdateRects source"
-            " offset: %i,%i visible: %ix%i decoded: %ix%i",
-            source->i_x_offset, source->i_y_offset,
-            source->i_visible_width, source->i_visible_height,
-            source->i_width, source->i_height);
-        msg_Dbg(vd, "DirectXUpdateRects image_dst"
-            " coords: %i,%i,%i,%i",
-            area->place.x, area->place.y,
-            area->place.x + area->place.width, area->place.y + area->place.height);
+        msg_Dbg(obj, "UpdateRects source offset: %i,%i visible: %ix%i decoded: %ix%i",
+            area->texture_source.i_x_offset, area->texture_source.i_y_offset,
+            area->texture_source.i_visible_width, area->texture_source.i_visible_height,
+            area->texture_source.i_width, area->texture_source.i_height);
+        msg_Dbg(obj, "UpdateRects image_dst coords: %i,%i %ix%i",
+            area->place.x, area->place.y, area->place.width, area->place.height);
 #endif
 
 #if !VLC_WINSTORE_APP
         if (sys->event != NULL)
         {
-            if (sys->hvideownd)
-            {
-                UINT swpFlags = SWP_NOCOPYBITS | SWP_NOZORDER | SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE;
-                if (sys->is_first_placement)
-                {
-                    swpFlags |= SWP_SHOWWINDOW;
-                    sys->is_first_placement = false;
-                }
-                SetWindowPos(sys->hvideownd, 0,
-                    area->place.x, area->place.y, area->place.width, area->place.height,
-                    swpFlags);
-            }
-
-            CommonChangeThumbnailClip(VLC_OBJECT(vd), sys, true);
+            CommonChangeThumbnailClip(obj, sys, true);
         }
 #endif
     }
@@ -198,7 +144,7 @@ void UpdateRects(vout_display_t *vd, display_win32_area_t *area, vout_display_sy
 
 #if !VLC_WINSTORE_APP
 /* */
-void CommonClean(vlc_object_t *obj, vout_display_sys_win32_t *sys)
+void CommonWindowClean(vlc_object_t *obj, vout_display_sys_win32_t *sys)
 {
     if (sys->event) {
         CommonChangeThumbnailClip(obj, sys, false);
@@ -254,7 +200,7 @@ static void CommonChangeThumbnailClip(vlc_object_t *obj, vout_display_sys_win32_
 }
 #endif /* !VLC_WINSTORE_APP */
 
-int CommonControl(vout_display_t *vd, display_win32_area_t *area, vout_display_sys_win32_t *sys, int query, va_list args)
+int CommonControl(vlc_object_t *obj, display_win32_area_t *area, vout_display_sys_win32_t *sys, int query, va_list args)
 {
     switch (query) {
     case VOUT_DISPLAY_CHANGE_DISPLAY_FILLED: /* const vout_display_cfg_t *p_cfg */
@@ -262,7 +208,7 @@ int CommonControl(vout_display_t *vd, display_win32_area_t *area, vout_display_s
     case VOUT_DISPLAY_CHANGE_SOURCE_ASPECT:
     case VOUT_DISPLAY_CHANGE_SOURCE_CROP: {
         area->vdcfg = *va_arg(args, const vout_display_cfg_t *);
-        UpdateRects(vd, area, sys);
+        CommonPlacePicture(obj, area, sys);
         return VLC_SUCCESS;
     }
     case VOUT_DISPLAY_CHANGE_DISPLAY_SIZE:   /* const vout_display_cfg_t *p_cfg */
@@ -271,12 +217,17 @@ int CommonControl(vout_display_t *vd, display_win32_area_t *area, vout_display_s
 #if !VLC_WINSTORE_APP
         if (sys->event != NULL)
         {
-            SetWindowPos(sys->hwnd, 0, 0, 0,
+            RECT clientRect;
+            GetClientRect(sys->hparent, &clientRect);
+            area->vdcfg.display.width  = RECTWidth(clientRect);
+            area->vdcfg.display.height = RECTHeight(clientRect);
+
+            SetWindowPos(sys->hvideownd, 0, 0, 0,
                          area->vdcfg.display.width,
                          area->vdcfg.display.height, SWP_NOZORDER|SWP_NOMOVE|SWP_NOACTIVATE);
         }
 #endif /* !VLC_WINSTORE_APP */
-        UpdateRects(vd, area, sys);
+        CommonPlacePicture(obj, area, sys);
         return VLC_SUCCESS;
     }
 

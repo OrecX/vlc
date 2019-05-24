@@ -36,10 +36,9 @@ typedef struct display_win32_area_t
     vout_display_place_t  place;
     bool                  place_changed;
 
-    vout_display_cfg_t    vdcfg;
+    video_format_t        texture_source;
 
-    bool (*pf_GetDisplayDimensions)(void *opaque, UINT *w, UINT *h);
-    void *opaque_dimensions;
+    vout_display_cfg_t    vdcfg;
 } display_win32_area_t;
 
 #define RECTWidth(r)   (LONG)((r).right - (r).left)
@@ -57,17 +56,12 @@ typedef struct vout_display_sys_win32_t
     event_thread_t *event;
 
     /* */
-    HWND                 hwnd;                  /* Handle of the main window */
     HWND                 hvideownd;        /* Handle of the video sub-window */
     HWND                 hparent;             /* Handle of the parent window */
 
 # if !defined(NDEBUG) && defined(HAVE_DXGIDEBUG_H)
     HINSTANCE     dxgidebug_dll;
 # endif
-
-    /* Misc */
-    bool is_first_placement;
-    bool is_on_top;
 } vout_display_sys_win32_t;
 
 
@@ -75,14 +69,15 @@ typedef struct vout_display_sys_win32_t
  * Prototypes from common.c
  *****************************************************************************/
 #if !VLC_WINSTORE_APP
-int  CommonInit(vlc_object_t *, display_win32_area_t *, vout_display_sys_win32_t *, bool projection_gestures);
-void CommonClean(vlc_object_t *, vout_display_sys_win32_t *);
+int  CommonWindowInit(vlc_object_t *, display_win32_area_t *, vout_display_sys_win32_t *,
+                      bool projection_gestures);
+void CommonWindowClean(vlc_object_t *, vout_display_sys_win32_t *);
 #endif /* !VLC_WINSTORE_APP */
-int  CommonControl(vout_display_t *, display_win32_area_t *, vout_display_sys_win32_t *, int , va_list );
+int  CommonControl(vlc_object_t *, display_win32_area_t *, vout_display_sys_win32_t *, int , va_list );
 
-void UpdateRects (vout_display_t *, display_win32_area_t *, vout_display_sys_win32_t *);
+void CommonPlacePicture (vlc_object_t *, display_win32_area_t *, vout_display_sys_win32_t *);
 
-void InitArea(vout_display_t *, display_win32_area_t *, const vout_display_cfg_t *);
+void CommonInit(vout_display_t *, display_win32_area_t *, const vout_display_cfg_t *);
 
 # ifdef __cplusplus
 extern "C" {

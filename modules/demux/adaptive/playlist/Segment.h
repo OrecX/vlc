@@ -30,11 +30,14 @@
 #include <vector>
 #include "ICanonicalUrl.hpp"
 #include "../http/Chunk.h"
+#include "../encryption/CommonEncryption.hpp"
 #include "../tools/Properties.hpp"
 #include "Time.hpp"
 
 namespace adaptive
 {
+    class SharedResources;
+
     namespace http
     {
         class AbstractConnectionManager;
@@ -47,6 +50,7 @@ namespace adaptive
         class SegmentChunk;
 
         using namespace http;
+        using namespace encryption;
 
         class ISegment : public ICanonicalUrl
         {
@@ -58,7 +62,8 @@ namespace adaptive
                  *          That is basically true when using an Url, and false
                  *          when using an UrlTemplate
                  */
-                virtual SegmentChunk*                   toChunk         (size_t, BaseRepresentation *, AbstractConnectionManager *);
+                virtual SegmentChunk*                   toChunk         (SharedResources *, AbstractConnectionManager *,
+                                                                         size_t, BaseRepresentation *);
                 virtual void                            setByteRange    (size_t start, size_t end);
                 virtual void                            setSequenceNumber(uint64_t);
                 virtual uint64_t                        getSequenceNumber() const;
@@ -69,6 +74,7 @@ namespace adaptive
                 virtual void                            debug           (vlc_object_t *,int = 0) const;
                 virtual bool                            contains        (size_t byte) const;
                 virtual int                             compare         (ISegment *) const;
+                void                                    setEncryption   (CommonEncryption &);
                 int                                     getClassId      () const;
                 Property<stime_t>       startTime;
                 Property<stime_t>       duration;
@@ -77,9 +83,15 @@ namespace adaptive
 
                 static const int CLASSID_ISEGMENT = 0;
                 /* callbacks */
-                virtual void                            onChunkDownload (block_t **, SegmentChunk *, BaseRepresentation *);
+                virtual void                            onChunkDownload (block_t **,
+                                                                         SegmentChunk *,
+                                                                         BaseRepresentation *);
 
             protected:
+                virtual bool                            prepareChunk    (SharedResources *,
+                                                                         SegmentChunk *,
+                                                                         BaseRepresentation *);
+                CommonEncryption        encryption;
                 size_t                  startByte;
                 size_t                  endByte;
                 std::string             debugName;

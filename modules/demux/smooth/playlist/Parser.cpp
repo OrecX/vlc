@@ -165,6 +165,9 @@ static void ParseQualityLevel(BaseAdaptationSet *adaptSet, Node *qualNode, const
             else if(qualNode->hasAttribute("Height"))
                 rep->setHeight(Integer<uint64_t>(qualNode->getAttributeValue("Height")));
 
+            if(qualNode->hasAttribute("FourCC"))
+                rep->addCodecs(qualNode->getAttributeValue("FourCC"));
+
             ForgedInitSegment *initSegment = new (std::nothrow)
                     ForgedInitSegment(segmentList, type,
                                       adaptSet->inheritTimescale(),
@@ -174,7 +177,7 @@ static void ParseQualityLevel(BaseAdaptationSet *adaptSet, Node *qualNode, const
                 initSegment->setTrackID(trackid);
 
                 if(!adaptSet->getLang().empty())
-                    initSegment->setLanguage(adaptSet->getLang().front());
+                    initSegment->setLanguage(adaptSet->getLang());
 
                 if(rep->getWidth() > 0 && rep->getHeight() > 0)
                     initSegment->setVideoSize(rep->getWidth(), rep->getHeight());
@@ -220,7 +223,7 @@ static void ParseStreamIndex(BasePeriod *period, Node *streamIndexNode, unsigned
     {
         adaptSet->setID(ID(id));
         if(streamIndexNode->hasAttribute("Language"))
-            adaptSet->addLang(streamIndexNode->getAttributeValue("Language"));
+            adaptSet->setLang(streamIndexNode->getAttributeValue("Language"));
 
         if(streamIndexNode->hasAttribute("Name"))
             adaptSet->description.Set(streamIndexNode->getAttributeValue("Name"));
@@ -236,7 +239,7 @@ static void ParseStreamIndex(BasePeriod *period, Node *streamIndexNode, unsigned
             if(templ)
             {
                 templ->setSourceUrl(url);
-                SegmentTimeline *timeline = createTimeline(streamIndexNode, period->inheritTimescale());
+                SegmentTimeline *timeline = createTimeline(streamIndexNode, adaptSet->inheritTimescale());
                 templ->setSegmentTimeline(timeline);
                 adaptSet->setSegmentTemplate(templ);
             }

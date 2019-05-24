@@ -101,7 +101,7 @@ static void Prepare(vout_display_t *vd, picture_t *picture, subpicture_t *subpic
 static int Control(vout_display_t *vd, int query, va_list args)
 {
     vout_display_sys_t *sys = vd->sys;
-    return CommonControl(vd, &sys->area, &sys->sys, query, args);
+    return CommonControl(VLC_OBJECT(vd), &sys->area, &sys->sys, query, args);
 }
 
 /* */
@@ -117,8 +117,8 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
     if (!sys)
         return VLC_ENOMEM;
 
-    InitArea(vd, &sys->area, cfg);
-    if (CommonInit(VLC_OBJECT(vd), &sys->area, &sys->sys, false))
+    CommonInit(vd, &sys->area, cfg);
+    if (CommonWindowInit(VLC_OBJECT(vd), &sys->area, &sys->sys, false))
         goto error;
 
     /* */
@@ -126,8 +126,6 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
         goto error;
 
     /* */
-    vd->info.has_double_click     = true;
-
     vd->prepare = Prepare;
     vd->display = Display;
     vd->control = Control;
@@ -143,7 +141,7 @@ static void Close(vout_display_t *vd)
 {
     Clean(vd);
 
-    CommonClean(VLC_OBJECT(vd), &vd->sys->sys);
+    CommonWindowClean(VLC_OBJECT(vd), &vd->sys->sys);
 
     free(vd->sys);
 }
@@ -155,11 +153,26 @@ static void Display(vout_display_t *vd, picture_t *picture)
 
     HDC hdc = GetDC(sys->sys.hvideownd);
 
+    if (sys->area.place_changed)
+    {
+        /* clear the background */
+        RECT display = {
+            .left   = 0,
+            .right  = sys->area.vdcfg.display.width,
+            .top    = 0,
+            .bottom = sys->area.vdcfg.display.height,
+        };
+        FillRect(hdc, &display, GetStockObject(BLACK_BRUSH));
+        sys->area.place_changed = false;
+    }
+
     SelectObject(sys->off_dc, sys->off_bitmap);
 
     if (sys->area.place.width  != vd->source.i_visible_width ||
         sys->area.place.height != vd->source.i_visible_height) {
-        StretchBlt(hdc, 0, 0,
+        SetStretchBltMode(hdc, COLORONCOLOR);
+
+        StretchBlt(hdc, sys->area.place.x, sys->area.place.y,
                    sys->area.place.width, sys->area.place.height,
                    sys->off_dc,
                    vd->source.i_x_offset, vd->source.i_y_offset,
@@ -167,7 +180,7 @@ static void Display(vout_display_t *vd, picture_t *picture)
                    vd->source.i_y_offset + vd->source.i_visible_height,
                    SRCCOPY);
     } else {
-        BitBlt(hdc, 0, 0,
+        BitBlt(hdc, sys->area.place.x, sys->area.place.y,
                sys->area.place.width, sys->area.place.height,
                sys->off_dc,
                vd->source.i_x_offset, vd->source.i_y_offset,
@@ -260,8 +273,6 @@ static int Init(vout_display_t *vd, video_format_t *fmt)
     ReleaseDC(sys->sys.hvideownd, window_dc);
 
     vout_window_SetTitle(sys->area.vdcfg.window, VOUT_TITLE " (WinGDI output)");
-
-    UpdateRects(vd, &sys->area, &sys->sys);
 
     return VLC_SUCCESS;
 }
